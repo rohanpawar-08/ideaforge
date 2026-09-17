@@ -43,17 +43,29 @@ LLM_API_KEY = os.getenv("LLM_API_KEY")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq")
 LLM_MODEL = os.getenv("LLM_MODEL", "openai/gpt-oss-20b")
 
-STAGE1_SYSTEM_PROMPT = (
-    "You are a technical project planning assistant. A user has given you a rough project idea. "
-    "Ask ONE clarifying question at a time to understand: who the project is for, the single most "
-    "important core feature, the user's current technical skill level, and their rough time budget. "
-    "Ask a maximum of 4 questions total. After that, or if the user says 'just generate it,' respond "
-    "with the roadmap JSON instead of another question. Respond ONLY in this JSON format, nothing else: "
-    '{"type": "question", "text": "<your question>"} or '
+SYSTEM_PROMPT = (
+    "You are a technical project planning assistant. A user has given you a rough project idea.\n"
+    "Your goal is to gather 4 key pieces of information to build a tailored project roadmap:\n"
+    "1. Target Audience: Who the project is for.\n"
+    "2. Core Feature: The single most important MVP capability or primary functionality.\n"
+    "3. Technical Skill Level: The user's current programming and technical experience.\n"
+    "4. Time Budget: Their rough available timeframe or weekly hours.\n\n"
+    "Adaptive Clarifying Flow Instructions:\n"
+    "- Ask ONE clarifying question at a time. Ask a maximum of 4 questions total.\n"
+    "- Adaptive ordering & wording: Do not follow a rigid script or fixed sequence. Review what the user has already shared in their idea and previous answers. If a piece of information is already provided or implied, acknowledge it and do not ask for it again. Choose whichever missing piece makes the most logical sense to ask next.\n"
+    "- Handling vague answers, 'I don't know', or requests for explanation:\n"
+    "  * If the user's answer is vague, says 'I don't know', or asks for an explanation instead of answering, YOU MUST FIRST briefly explain that concept in plain, simple, jargon-free language (with 1-2 concrete, relatable examples or options tailored to their project idea).\n"
+    "  * DO NOT repeat the exact same question. Instead, naturally continue toward the next piece of missing information or offer options/suggestions they can easily choose from.\n"
+    "- Completion: After 4 questions total, or if the user says 'just generate it', respond with the roadmap JSON instead of another question.\n\n"
+    "Respond ONLY in this JSON format, nothing else:\n"
+    '{"type": "question", "text": "<your plain-language explanation (if needed) and clarifying question>"}\n'
+    "or\n"
     '{"type": "roadmap", "data": {"feasibility": "beginner|intermediate|advanced", "estimated_weeks": <number>, '
     '"recommended_stack": ["<tech>"], "mvp_features": ["<feature>"], "stretch_features": ["<feature>"], '
     '"milestones": [{"week": <number>, "goal": "<goal>", "tasks": ["<task>"]}]}}'
 )
+STAGE1_SYSTEM_PROMPT = SYSTEM_PROMPT
+
 
 ROADMAP_SYSTEM_PROMPT = (
     "You are a technical project planning assistant. Based on the user's project idea and previous clarifying answers, "
@@ -284,7 +296,7 @@ def generate_plan(request: IdeaRequest, db: Session = Depends(get_db)):
             return roadmap_response
         else:
             messages = [
-                {"role": "system", "content": STAGE1_SYSTEM_PROMPT},
+                {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_content},
             ]
             response = call_groq_llm(messages)
