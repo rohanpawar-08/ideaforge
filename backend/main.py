@@ -420,6 +420,9 @@ def generate_plan(request: IdeaRequest, db: Session = Depends(get_db)):
                 db.add(roadmap_record)
                 db.commit()
                 db.refresh(roadmap_record)
+                roadmap_response["id"] = roadmap_record.id
+                if isinstance(roadmap_response.get("data"), dict):
+                    roadmap_response["data"]["id"] = roadmap_record.id
             except Exception as db_err:
                 logger.error(f"Database save error in roadmap stage: {db_err}", exc_info=True)
                 db.rollback()
@@ -442,6 +445,9 @@ def generate_plan(request: IdeaRequest, db: Session = Depends(get_db)):
                     db.add(roadmap_record)
                     db.commit()
                     db.refresh(roadmap_record)
+                    response["id"] = roadmap_record.id
+                    if isinstance(response.get("data"), dict):
+                        response["data"]["id"] = roadmap_record.id
                 except Exception as db_err:
                     logger.error(f"Database save error in question stage: {db_err}", exc_info=True)
                     db.rollback()

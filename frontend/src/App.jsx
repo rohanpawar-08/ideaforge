@@ -24,9 +24,82 @@ function App() {
   const [historyError, setHistoryError] = useState(null)
   const [isLoadingSaved, setIsLoadingSaved] = useState(false)
 
+  // Progress tracking: map of { [taskText]: boolean } for the current roadmap
+  const [checkedTasks, setCheckedTasks] = useState({})
+
   const chatEndRef = useRef(null)
   const inputRef = useRef(null)
   const lastRequestRef = useRef({ ideaText: '', answers: [] })
+
+  // Restore active roadmap across page reloads
+  useEffect(() => {
+    try {
+      const savedRoadmap = localStorage.getItem('ideaforge_active_roadmap')
+      const savedRoadmapId = localStorage.getItem('ideaforge_active_roadmap_id')
+      const savedView = localStorage.getItem('ideaforge_active_view')
+      if (savedRoadmap && savedRoadmapId) {
+        const parsed = JSON.parse(savedRoadmap)
+        setRoadmap(parsed)
+        setView(savedView === 'saved_roadmap' ? 'saved_roadmap' : 'generator')
+      }
+    } catch (err) {
+      console.warn('Could not restore active roadmap from localStorage:', err)
+    }
+  }, [])
+
+  // Sync checked tasks state from localStorage whenever roadmap changes
+  useEffect(() => {
+    if (!roadmap?.id) {
+      setCheckedTasks({})
+      return
+    }
+    const roadmapId = roadmap.id
+    const newChecked = {}
+    const milestones = roadmap.milestones || []
+    milestones.forEach((m) => {
+      const tasks = Array.isArray(m.tasks)
+        ? m.tasks
+        : typeof m.tasks === 'string'
+        ? [m.tasks]
+        : []
+      tasks.forEach((t) => {
+        const isChecked =
+          localStorage.getItem(`roadmap_${roadmapId}_task_${t}`) === 'true' ||
+          localStorage.getItem(`roadmap_${roadmapId}_${t}`) === 'true'
+        if (isChecked) {
+          newChecked[t] = true
+        }
+      })
+    })
+    setCheckedTasks(newChecked)
+  }, [roadmap?.id, roadmap?.milestones])
+
+  // Toggle task completion and persist in localStorage keyed by roadmap id and task text
+  const handleToggleTask = (taskText) => {
+    if (!roadmap?.id) return
+    const roadmapId = roadmap.id
+    const isCurrentlyChecked = Boolean(checkedTasks[taskText])
+    const nextState = !isCurrentlyChecked
+
+    const keyWithTask = `roadmap_${roadmapId}_task_${taskText}`
+    const keySimple = `roadmap_${roadmapId}_${taskText}`
+
+    if (nextState) {
+      localStorage.setItem(keyWithTask, 'true')
+      localStorage.setItem(keySimple, 'true')
+    } else {
+      localStorage.removeItem(keyWithTask)
+      localStorage.removeItem(keySimple)
+    }
+
+    setCheckedTasks((prev) => {
+      const updated = { ...prev, [taskText]: nextState }
+      if (!nextState) {
+        delete updated[taskText]
+      }
+      return updated
+    })
+  }
 
   const formatDate = (dateString) => {
     if (!dateString) return ''
@@ -112,13 +185,21 @@ function App() {
       }
       const data = await res.json()
       const innerData = data.data || data
-      setRoadmap({
+      const fullRoadmap = {
         ...innerData,
         id: data.id,
         original_idea: data.original_idea,
         created_at: data.created_at,
-      })
+      }
+      setRoadmap(fullRoadmap)
       setView('saved_roadmap')
+      try {
+        localStorage.setItem('ideaforge_active_roadmap_id', String(data.id))
+        localStorage.setItem('ideaforge_active_roadmap', JSON.stringify(fullRoadmap))
+        localStorage.setItem('ideaforge_active_view', 'saved_roadmap')
+      } catch (e) {
+        console.warn('Could not save active roadmap to localStorage:', e)
+      }
     } catch (err) {
       console.error('Failed to load roadmap details:', err)
       setHistoryError('Could not open the selected roadmap. Please try again.')
@@ -168,10 +249,22 @@ function App() {
         ])
       } else if (data.type === 'roadmap') {
         const roadmapData = data.data || data
-        setRoadmap({
+        const fullRoadmap = {
           ...roadmapData,
+          id: data.id || roadmapData.id,
           original_idea: ideaText,
-        })
+        }
+        setRoadmap(fullRoadmap)
+        try {
+          if (fullRoadmap.id) {
+            localStorage.setItem('ideaforge_active_roadmap_id', String(fullRoadmap.id))
+          }
+          localStorage.setItem('ideaforge_active_roadmap', JSON.stringify(fullRoadmap))
+          localStorage.setItem('ideaforge_active_view', 'generator')
+        } catch (e) {
+          console.warn('Could not save active roadmap to localStorage:', e)
+        }
+
         setMessages((prev) => [
           ...prev,
           {
@@ -224,6 +317,13 @@ function App() {
 
   // Reset to start a new idea
   const handleReset = () => {
+    try {
+      localStorage.removeItem('ideaforge_active_roadmap')
+      localStorage.removeItem('ideaforge_active_roadmap_id')
+      localStorage.removeItem('ideaforge_active_view')
+    } catch (e) {
+      console.warn(e)
+    }
     setView('generator')
     setIdea('')
     setHasStarted(false)
@@ -231,6 +331,7 @@ function App() {
     setPreviousAnswers([])
     setInputValue('')
     setRoadmap(null)
+    setCheckedTasks({})
     setError(null)
     lastRequestRef.current = { ideaText: '', answers: [] }
   }
@@ -247,6 +348,18 @@ function App() {
 
   const isShowingRoadmap =
     (view === 'generator' && Boolean(roadmap)) || view === 'saved_roadmap'
+
+  // Progress metrics calculation
+  const allMilestones = roadmap?.milestones || []
+  const allTasks = allMilestones.flatMap((m) =>
+    Array.isArray(m.tasks) ? m.tasks : typeof m.tasks === 'string' ? [m.tasks] : []
+  )
+  const totalTasksCount = allTasks.length
+  const completedTasksCount = allTasks.filter((t) => Boolean(checkedTasks[t])).length
+  const progressPercentage =
+    totalTasksCount > 0
+      ? Math.round((completedTasksCount / totalTasksCount) * 100)
+      : 0
 
   return (
     <div className="app-container">
@@ -405,6 +518,43 @@ function App() {
                     Saved on {formatDate(roadmap.created_at)}
                   </span>
                 )}
+              </div>
+            )}
+
+            {/* Progress Card at Top of Roadmap View */}
+            {totalTasksCount > 0 && (
+              <div className="roadmap-progress-card" id="roadmap-progress-card">
+                <div className="progress-card-header">
+                  <div className="progress-info">
+                    <span className="progress-badge-icon">🎯</span>
+                    <div>
+                      <h3 className="progress-main-title">Roadmap Progress</h3>
+                      <p className="progress-task-stats" id="progress-task-stats">
+                        {completedTasksCount} of {totalTasksCount} tasks complete
+                      </p>
+                    </div>
+                  </div>
+                  <div className="progress-percentage-display">
+                    <span
+                      className="progress-percentage-num"
+                      id="progress-percentage-num"
+                    >
+                      {progressPercentage}%
+                    </span>
+                  </div>
+                </div>
+
+                <div className="progress-bar-track">
+                  <div
+                    className="progress-bar-fill"
+                    id="progress-bar-fill"
+                    style={{ width: `${progressPercentage}%` }}
+                    role="progressbar"
+                    aria-valuenow={progressPercentage}
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                  />
+                </div>
               </div>
             )}
 
@@ -572,36 +722,67 @@ function App() {
               </div>
             )}
 
-            {/* Timeline Milestones */}
+            {/* Timeline Milestones with Interactive Progress Checkboxes */}
             <div className="timeline-container">
               <h3 className="timeline-title">Weekly Milestone Execution Plan</h3>
               <div className="timeline">
-                {(roadmap.milestones || []).map((milestone, idx) => (
-                  <div key={idx} className="timeline-item">
-                    <div className="timeline-marker">
-                      <span className="marker-number">
-                        {milestone.week !== undefined ? milestone.week : idx + 1}
-                      </span>
-                    </div>
-
-                    <div className="timeline-content">
-                      <div className="milestone-badge">
-                        Week {milestone.week !== undefined ? milestone.week : idx + 1}
+                {(roadmap.milestones || []).map((milestone, idx) => {
+                  const tasks = Array.isArray(milestone.tasks)
+                    ? milestone.tasks
+                    : typeof milestone.tasks === 'string'
+                    ? [milestone.tasks]
+                    : []
+                  return (
+                    <div key={idx} className="timeline-item">
+                      <div className="timeline-marker">
+                        <span className="marker-number">
+                          {milestone.week !== undefined ? milestone.week : idx + 1}
+                        </span>
                       </div>
-                      <h4 className="milestone-goal">{milestone.goal}</h4>
-                      {milestone.tasks && milestone.tasks.length > 0 && (
-                        <ul className="milestone-tasks">
-                          {milestone.tasks.map((task, tIdx) => (
-                            <li key={tIdx} className="task-item">
-                              <span className="task-checkbox">✓</span>
-                              <span className="task-text">{task}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
+
+                      <div className="timeline-content">
+                        <div className="milestone-badge">
+                          Week {milestone.week !== undefined ? milestone.week : idx + 1}
+                        </div>
+                        <h4 className="milestone-goal">{milestone.goal}</h4>
+                        {tasks.length > 0 && (
+                          <ul className="milestone-tasks">
+                            {tasks.map((task, tIdx) => {
+                              const isChecked = Boolean(checkedTasks[task])
+                              const checkboxId = `task-chk-${idx}-${tIdx}`
+                              return (
+                                <li
+                                  key={tIdx}
+                                  className={`task-item ${isChecked ? 'task-checked' : ''}`}
+                                  onClick={() => handleToggleTask(task)}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    id={checkboxId}
+                                    className="task-checkbox-input"
+                                    checked={isChecked}
+                                    onChange={(e) => {
+                                      e.stopPropagation()
+                                      handleToggleTask(task)
+                                    }}
+                                    aria-label={`Mark task completed: ${task}`}
+                                  />
+                                  <label
+                                    htmlFor={checkboxId}
+                                    className="task-text"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    {task}
+                                  </label>
+                                </li>
+                              )
+                            })}
+                          </ul>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             </div>
           </section>

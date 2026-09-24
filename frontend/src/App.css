@@ -674,28 +674,38 @@ input[type='text']:focus {
 .task-item {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
-  font-size: 13px;
+  gap: 10px;
+  font-size: 13.5px;
   color: #334155;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  transition: background-color 0.15s ease;
+  cursor: pointer;
 }
 
-.task-checkbox {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
-  background: #e2e8f0;
-  color: #475569;
-  font-size: 10px;
-  font-weight: bold;
-  flex-shrink: 0;
+.task-item:hover {
+  background-color: #f1f5f9;
+}
+
+.task-checkbox-input {
+  width: 17px;
+  height: 17px;
+  accent-color: var(--color-primary);
+  cursor: pointer;
   margin-top: 2px;
+  flex-shrink: 0;
 }
 
 .task-text {
-  line-height: 1.4;
+  line-height: 1.45;
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.15s ease;
+}
+
+.task-item.task-checked .task-text {
+  text-decoration: line-through;
+  color: var(--color-text-dim);
 }
 
 /* Setup Guide Section */
@@ -1125,5 +1135,78 @@ input[type='text']:focus {
 .history-card:hover .history-card-view-link {
   transform: translateX(4px);
 }
+
+/* Roadmap Execution Progress Card */
+.roadmap-progress-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 20px 24px;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 4px;
+}
+
+.progress-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.progress-info {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.progress-badge-icon {
+  font-size: 26px;
+  line-height: 1;
+}
+
+.progress-main-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--color-text-main);
+  letter-spacing: -0.01em;
+  margin-bottom: 2px;
+}
+
+.progress-task-stats {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.progress-percentage-display {
+  display: flex;
+  align-items: center;
+}
+
+.progress-percentage-num {
+  font-size: 24px;
+  font-weight: 800;
+  color: var(--color-primary);
+  letter-spacing: -0.02em;
+}
+
+.progress-bar-track {
+  width: 100%;
+  height: 9px;
+  background-color: #e2e8f0;
+  border-radius: 9999px;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--color-primary) 0%, #3b82f6 100%);
+  border-radius: 9999px;
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
 
 
