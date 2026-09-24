@@ -9,7 +9,14 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from database import engine, Base, get_db
-from schemas import IdeaRequest
+from schemas import (
+    IdeaRequest,
+    RegenerateRequest,
+    CompareRequest,
+    AskRequest,
+    ApplyChangeRequest,
+)
+from sqlalchemy.orm.attributes import flag_modified
 import models
 
 logging.basicConfig(
@@ -386,6 +393,413 @@ def get_roadmap(roadmap_id: int, db: Session = Depends(get_db)):
         return JSONResponse(
             status_code=500,
             content={"error": True, "detail": str(exc), "message": "Failed to fetch roadmap."}
+        )
+
+
+@app.post("/roadmaps/{roadmap_id}/regenerate")
+def regenerate_roadmap_section(
+    roadmap_id: int,
+    request: RegenerateRequest,
+    db: Session = Depends(get_db),
+):
+    section_raw = (request.section or "").strip().lower()
+    if section_raw in ["stack", "recommended_stack"]:
+        target_key = "recommended_stack"
+    elif section_raw in ["setup_guide", "setup", "setupguide"]:
+        target_key = "setup_guide"
+    elif section_raw in ["milestones", "milestone"]:
+        target_key = "milestones"
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid section. Must be 'stack', 'setup_guide', or 'milestones'.",
+        )
+
+    roadmap = (
+        db.query(models.Roadmap)
+        .filter(models.Roadmap.id == roadmap_id)
+        .first()
+    )
+    if not roadmap:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Roadmap with id {roadmap_id} not found",
+        )
+
+    current_data = dict(roadmap.data) if isinstance(roadmap.data, dict) else {}
+    inner_data = (
+        current_data.get("data")
+        if isinstance(current_data.get("data"), dict)
+        else current_data
+    )
+
+    original_idea = roadmap.original_idea
+    feasibility = inner_data.get("feasibility", "intermediate")
+    estimated_weeks = inner_data.get("estimated_weeks", 4)
+    current_stack = inner_data.get("recommended_stack", [])
+    current_mvp = inner_data.get("mvp_features", [])
+    current_stretch = inner_data.get("stretch_features", [])
+
+    previous_answers = request.previous_answers or []
+    prev_answers_text = ""
+    if previous_answers:
+        prev_answers_text = "\nPrevious Clarifying Answers:\n" + "\n".join(
+            f"- {ans}" for ans in previous_answers
+        )
+
+    full_roadmap_json = json.dumps(inner_data, indent=2)
+
+    if target_key == "recommended_stack":
+        system_prompt = (
+            "You are a technical project planning assistant. The user wants to regenerate ONLY the recommended tech stack for their project.\n"
+            "Keep everything else about the project (feasibility, timeline, setup guide, MVP features, milestones) consistent.\n"
+            "Respond ONLY with a valid JSON object in this format:\n"
+            '{\n  "recommended_stack": ["<tech1>", "<tech2>", "<tech3>"]\n}'
+        )
+        user_prompt = (
+            f"Original Idea: {original_idea}{prev_answers_text}\n\n"
+            f"Current Full Roadmap Data:\n{full_roadmap_json}\n\n"
+            "Regenerate ONLY the recommended tech stack for this project while keeping everything else consistent."
+        )
+    elif target_key == "setup_guide":
+        system_prompt = (
+            "You are a technical project planning assistant. The user wants to regenerate ONLY the developer setup guide for their project roadmap.\n"
+            "Keep everything else about the project (idea, stack, MVP features, milestones) consistent.\n"
+            "Respond ONLY with a valid JSON object in this format:\n"
+            "{\n"
+            '  "setup_guide": {\n'
+            '    "primary_language": "<main language to use with one-line reason>",\n'
+            '    "editor_recommendation": "<code editor/IDE to use and why>",\n'
+            '    "key_tools": [\n'
+            '      {"name": "<tool_name>", "purpose": "<specific_purpose>"}\n'
+            '    ],\n'
+            '    "getting_started_command": "<terminal command to initialize project>"\n'
+            "  }\n"
+            "}"
+        )
+        user_prompt = (
+            f"Original Idea: {original_idea}{prev_answers_text}\n\n"
+            f"Current Full Roadmap Data:\n{full_roadmap_json}\n\n"
+            "Regenerate ONLY the developer setup guide (primary language, editor recommendation, key tools, getting started command) while keeping everything else consistent."
+        )
+    else:  # milestones
+        system_prompt = (
+            "You are a technical project planning assistant. The user wants to regenerate ONLY the weekly milestone execution plan for their project roadmap.\n"
+            f"Keep the timeline duration consistent with the current roadmap ({estimated_weeks} weeks) and aligned with the stack and MVP scope.\n"
+            "Keep everything else about the project consistent.\n"
+            "Respond ONLY with a valid JSON object in this format:\n"
+            "{\n"
+            '  "milestones": [\n'
+            '    {\n'
+            '      "week": 1,\n'
+            '      "goal": "<milestone goal>",\n'
+            '      "tasks": ["<task1>", "<task2>"]\n'
+            '    }\n'
+            '  ]\n'
+            "}"
+        )
+        user_prompt = (
+            f"Original Idea: {original_idea}{prev_answers_text}\n\n"
+            f"Current Full Roadmap Data:\n{full_roadmap_json}\n\n"
+            f"Regenerate ONLY the week-by-week milestone execution plan spanning {estimated_weeks} weeks while keeping everything else consistent."
+        )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    try:
+        llm_response = call_groq_llm(messages)
+        if target_key == "recommended_stack":
+            updated_section_data = (
+                llm_response.get("recommended_stack")
+                or llm_response.get("stack")
+                or (llm_response if isinstance(llm_response, list) else [])
+            )
+            if not isinstance(updated_section_data, list):
+                updated_section_data = [str(updated_section_data)]
+        elif target_key == "setup_guide":
+            updated_section_data = llm_response.get("setup_guide") or llm_response
+            if not isinstance(updated_section_data, dict):
+                raise ValueError("setup_guide must be a JSON object")
+        else:  # milestones
+            updated_section_data = (
+                llm_response.get("milestones")
+                or (llm_response if isinstance(llm_response, list) else [])
+            )
+            if not isinstance(updated_section_data, list):
+                raise ValueError("milestones must be a list of milestone objects")
+
+        # Update in database
+        inner_data[target_key] = updated_section_data
+        roadmap.data = dict(current_data)
+        flag_modified(roadmap, "data")
+        db.commit()
+        db.refresh(roadmap)
+
+        return {
+            "section": request.section,
+            "target_key": target_key,
+            "data": updated_section_data,
+            "roadmap": {
+                "id": roadmap.id,
+                "original_idea": roadmap.original_idea,
+                "created_at": roadmap.created_at.isoformat() if roadmap.created_at else None,
+                "data": inner_data,
+            },
+        }
+    except Exception as exc:
+        logger.error(
+            f"Error regenerating section '{target_key}' for roadmap {roadmap_id}: {exc}",
+            exc_info=True,
+        )
+        db.rollback()
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": True,
+                "detail": str(exc),
+                "message": f"Failed to regenerate section {request.section}. Please try again.",
+            },
+        )
+
+
+@app.post("/roadmaps/{roadmap_id}/ask")
+def ask_about_roadmap(
+    roadmap_id: int,
+    request: AskRequest,
+    db: Session = Depends(get_db),
+):
+    roadmap = (
+        db.query(models.Roadmap)
+        .filter(models.Roadmap.id == roadmap_id)
+        .first()
+    )
+    if not roadmap:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Roadmap with id {roadmap_id} not found",
+        )
+
+    user_message = (request.message or "").strip()
+    if not user_message:
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+
+    current_data = dict(roadmap.data) if isinstance(roadmap.data, dict) else {}
+    inner_data = (
+        current_data.get("data")
+        if isinstance(current_data.get("data"), dict)
+        else current_data
+    )
+
+    original_idea = roadmap.original_idea
+    full_roadmap_json = json.dumps(inner_data, indent=2)
+
+    system_prompt = (
+        "You are an expert technical advisor and software project coach assisting a developer with their project roadmap.\n"
+        "You have full context of the original idea and the complete roadmap.\n\n"
+        "The developer will ask you questions or request modifications to their roadmap.\n"
+        "Evaluate the developer's message carefully:\n"
+        "1. If the message is a general question, explanation request, or inquiry (e.g., 'why is week 2 focused on auth?', 'how do I set up testing?', 'is this stack good for scale?'):\n"
+        "   - Provide a friendly, comprehensive, conversational explanation.\n"
+        "   - Set 'proposed_change' to null.\n"
+        "2. If the message is clearly asking to modify, update, replace, simplify, or adjust a specific section of the roadmap (e.g. 'simplify week 3', 'can I use Vue instead of React', 'change IDE to PyCharm', 'add Docker to the stack', 'reduce week 1 tasks'):\n"
+        "   - In 'reply', explain conversationally what you changed, why it makes sense, and how it impacts the project.\n"
+        "   - In 'proposed_change', provide the full updated version of that section while keeping everything else consistent.\n\n"
+        "Respond ONLY with a valid JSON object in this structure:\n"
+        "{\n"
+        '  "reply": "<helpful, conversational text response>",\n'
+        '  "proposed_change": null | {\n'
+        '    "section": "stack" | "setup_guide" | "milestones",\n'
+        '    "target_key": "recommended_stack" | "setup_guide" | "milestones",\n'
+        '    "summary": "<short description of what was changed>",\n'
+        '    "data": <the full updated section: list for stack, object for setup_guide, or list of milestones for milestones>\n'
+        "  }\n"
+        "}"
+    )
+
+    user_prompt = (
+        f"Original Project Idea: {original_idea}\n\n"
+        f"Current Full Roadmap:\n{full_roadmap_json}\n\n"
+        f"Developer's Message: {user_message}"
+    )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    try:
+        llm_response = call_groq_llm(messages)
+        reply = llm_response.get("reply") or str(llm_response)
+        proposed_change = llm_response.get("proposed_change")
+
+        # Validate and clean proposed_change if present
+        if isinstance(proposed_change, dict) and proposed_change.get("data"):
+            section_raw = str(proposed_change.get("section", "")).lower()
+            if "stack" in section_raw:
+                proposed_change["section"] = "stack"
+                proposed_change["target_key"] = "recommended_stack"
+                if not isinstance(proposed_change["data"], list):
+                    proposed_change["data"] = [str(proposed_change["data"])]
+            elif "setup" in section_raw:
+                proposed_change["section"] = "setup_guide"
+                proposed_change["target_key"] = "setup_guide"
+            elif "milestone" in section_raw or "week" in section_raw:
+                proposed_change["section"] = "milestones"
+                proposed_change["target_key"] = "milestones"
+                if not isinstance(proposed_change["data"], list):
+                    proposed_change = None
+        else:
+            proposed_change = None
+
+        return {
+            "reply": reply,
+            "proposed_change": proposed_change,
+        }
+    except Exception as exc:
+        logger.error(f"Error in /roadmaps/{roadmap_id}/ask: {exc}", exc_info=True)
+        return {
+            "reply": f"I reviewed your question regarding '{user_message}'. Could you clarify or retry your request?",
+            "proposed_change": None,
+        }
+
+
+@app.post("/roadmaps/{roadmap_id}/apply-change")
+def apply_roadmap_change(
+    roadmap_id: int,
+    request: ApplyChangeRequest,
+    db: Session = Depends(get_db),
+):
+    roadmap = (
+        db.query(models.Roadmap)
+        .filter(models.Roadmap.id == roadmap_id)
+        .first()
+    )
+    if not roadmap:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Roadmap with id {roadmap_id} not found",
+        )
+
+    section_raw = (request.section or "").strip().lower()
+    if section_raw in ["stack", "recommended_stack"]:
+        target_key = "recommended_stack"
+    elif section_raw in ["setup_guide", "setup", "setupguide"]:
+        target_key = "setup_guide"
+    elif section_raw in ["milestones", "milestone"]:
+        target_key = "milestones"
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid section. Must be 'stack', 'setup_guide', or 'milestones'.",
+        )
+
+    current_data = dict(roadmap.data) if isinstance(roadmap.data, dict) else {}
+    inner_data = (
+        current_data.get("data")
+        if isinstance(current_data.get("data"), dict)
+        else current_data
+    )
+
+    inner_data[target_key] = request.data
+    roadmap.data = dict(current_data)
+    flag_modified(roadmap, "data")
+    db.commit()
+    db.refresh(roadmap)
+
+    return {
+        "success": True,
+        "target_key": target_key,
+        "section": request.section,
+        "roadmap": {
+            "id": roadmap.id,
+            "original_idea": roadmap.original_idea,
+            "created_at": roadmap.created_at.isoformat() if roadmap.created_at else None,
+            "data": inner_data,
+        },
+    }
+
+
+@app.post("/compare")
+def compare_ideas(request: CompareRequest):
+    raw_ideas = [i.strip() for i in (request.ideas or []) if i and i.strip()]
+    if len(raw_ideas) < 2 or len(raw_ideas) > 3:
+        raise HTTPException(
+            status_code=400,
+            detail="Please provide between 2 and 3 ideas to compare.",
+        )
+
+    ideas_formatted = "\n\n".join(
+        f"Idea {idx}: {text}" for idx, text in enumerate(raw_ideas, 1)
+    )
+
+    system_prompt = (
+        "You are an expert technical product advisor and software architect.\n"
+        "Your task is to evaluate and compare 2 to 3 software project ideas objectively.\n"
+        "Analyze each idea in terms of:\n"
+        "- Feasibility level: strictly one of 'beginner', 'intermediate', or 'advanced'\n"
+        "- Estimated timeline: realistic development duration in integer weeks\n"
+        "- Pros: 2 to 4 distinct key advantages, learning benefits, market or technical feasibility points\n"
+        "- Cons: 2 to 4 distinct key challenges, complexity hurdles, third-party dependencies, or pitfalls\n"
+        "Then synthesize a rich, balanced recommendation explaining which idea to pick and why, comparing trade-offs across all of them (e.g., for different developer goals like learning vs shipping fast vs portfolio showcase).\n\n"
+        "Respond ONLY with a valid JSON object matching this exact structure:\n"
+        "{\n"
+        '  "comparisons": [\n'
+        "    {\n"
+        '      "idea": "<exact idea text>",\n'
+        '      "feasibility": "beginner|intermediate|advanced",\n'
+        '      "estimated_weeks": <integer weeks>,\n'
+        '      "pros": ["<pro 1>", "<pro 2>"],\n'
+        '      "cons": ["<con 1>", "<con 2>"]\n'
+        "    }\n"
+        "  ],\n"
+        '  "recommendation": "<detailed comparison recommendation explaining which idea to pick and why, comparing tradeoffs across all of them>"\n'
+        "}"
+    )
+
+    user_prompt = f"Please compare and evaluate these project ideas:\n\n{ideas_formatted}"
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    try:
+        data = call_groq_llm(messages)
+        comparisons = data.get("comparisons")
+        if not isinstance(comparisons, list) or len(comparisons) < 2:
+            raise ValueError("Malformed response: 'comparisons' must be a list with at least 2 entries")
+
+        cleaned_comparisons = []
+        for idx, item in enumerate(comparisons):
+            original_input_text = raw_ideas[idx] if idx < len(raw_ideas) else item.get("idea", f"Idea {idx+1}")
+            cleaned_comparisons.append({
+                "idea": original_input_text,
+                "feasibility": str(item.get("feasibility", "intermediate")).lower(),
+                "estimated_weeks": int(item.get("estimated_weeks", 4)),
+                "pros": [str(p) for p in (item.get("pros") or [])],
+                "cons": [str(c) for c in (item.get("cons") or [])],
+            })
+
+        recommendation = str(data.get("recommendation", "")).strip()
+        if not recommendation:
+            recommendation = "All compared ideas offer distinct trade-offs. Choose based on your target timeline and desired learning outcomes."
+
+        return {
+            "comparisons": cleaned_comparisons,
+            "recommendation": recommendation,
+        }
+    except Exception as exc:
+        logger.error(f"Error in /compare endpoint: {exc}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": True,
+                "detail": str(exc),
+                "message": "Failed to compare project ideas. Please try again.",
+            },
         )
 
 
