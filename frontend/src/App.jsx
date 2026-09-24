@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
+import { downloadRoadmapPdf } from './pdfExport'
 import './App.css'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
@@ -132,6 +133,17 @@ function App() {
       setTimeout(() => setCopiedCommand(false), 2000)
     } catch (err) {
       console.error('Failed to copy to clipboard:', err)
+    }
+  }
+
+  // Generate and download roadmap as clean, formatted PDF
+  const handleDownloadPdf = () => {
+    if (!roadmap) return
+    try {
+      downloadRoadmapPdf(roadmap, roadmap.original_idea || idea)
+    } catch (err) {
+      console.error('Failed to export roadmap as PDF:', err)
+      alert('Failed to generate PDF. Please try again.')
     }
   }
 
@@ -513,11 +525,22 @@ function App() {
                 >
                   ← Back to History
                 </button>
-                {roadmap.created_at && (
-                  <span className="saved-date-tag">
-                    Saved on {formatDate(roadmap.created_at)}
-                  </span>
-                )}
+                <div className="toolbar-right-actions">
+                  <button
+                    type="button"
+                    className="btn-secondary btn-xs btn-download-pdf"
+                    onClick={handleDownloadPdf}
+                    id="btn-download-pdf-toolbar"
+                    title="Download roadmap as PDF"
+                  >
+                    📥 PDF
+                  </button>
+                  {roadmap.created_at && (
+                    <span className="saved-date-tag">
+                      Saved on {formatDate(roadmap.created_at)}
+                    </span>
+                  )}
+                </div>
               </div>
             )}
 
@@ -568,9 +591,20 @@ function App() {
                     </p>
                   )}
                 </div>
-                <button className="btn-secondary btn-sm" onClick={handleReset}>
-                  Plan Another Project
-                </button>
+                <div className="roadmap-header-actions">
+                  <button
+                    type="button"
+                    className="btn-secondary btn-sm btn-download-pdf"
+                    onClick={handleDownloadPdf}
+                    id="btn-download-pdf"
+                    title="Download roadmap as a formatted PDF"
+                  >
+                    📥 Download as PDF
+                  </button>
+                  <button className="btn-secondary btn-sm" onClick={handleReset}>
+                    Plan Another Project
+                  </button>
+                </div>
               </div>
 
               {/* Top Meta Summary: Feasibility, Weeks, Tech Stack */}
