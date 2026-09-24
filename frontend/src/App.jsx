@@ -28,6 +28,56 @@ function App() {
   // Progress tracking: map of { [taskText]: boolean } for the current roadmap
   const [checkedTasks, setCheckedTasks] = useState({})
 
+  // Theme state: 'light' | 'dark' (defaults to user choice or prefers-color-scheme)
+  const [theme, setTheme] = useState(() => {
+    try {
+      const savedTheme = localStorage.getItem('ideaforge_theme')
+      if (savedTheme === 'dark' || savedTheme === 'light') {
+        return savedTheme
+      }
+    } catch (e) {
+      console.warn(e)
+    }
+    if (typeof window !== 'undefined' && window.matchMedia) {
+      return window.matchMedia('(prefers-color-scheme: dark)').matches
+        ? 'dark'
+        : 'light'
+    }
+    return 'light'
+  })
+
+  // Synchronize document data-theme attribute and localStorage on theme change
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+    try {
+      localStorage.setItem('ideaforge_theme', theme)
+    } catch (e) {
+      console.warn(e)
+    }
+  }, [theme])
+
+  // Listen for system theme changes if user hasn't explicitly set a preference
+  useEffect(() => {
+    const mediaQuery = window.matchMedia?.('(prefers-color-scheme: dark)')
+    if (!mediaQuery) return
+
+    const handleSystemThemeChange = (e) => {
+      const savedTheme = localStorage.getItem('ideaforge_theme')
+      if (!savedTheme) {
+        setTheme(e.matches ? 'dark' : 'light')
+      }
+    }
+
+    mediaQuery.addEventListener?.('change', handleSystemThemeChange)
+    return () => {
+      mediaQuery.removeEventListener?.('change', handleSystemThemeChange)
+    }
+  }, [])
+
+  const toggleTheme = () => {
+    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))
+  }
+
   const chatEndRef = useRef(null)
   const inputRef = useRef(null)
   const lastRequestRef = useRef({ ideaText: '', answers: [] })
@@ -388,6 +438,16 @@ function App() {
           <p>Turn a rough project idea into an actionable, week-by-week build plan.</p>
         </div>
         <div className="header-actions">
+          <button
+            type="button"
+            className="btn-theme-toggle"
+            onClick={toggleTheme}
+            id="btn-theme-toggle"
+            title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+          >
+            {theme === 'dark' ? '☀️' : '🌙'}
+          </button>
           <button
             className={`btn-secondary btn-sm ${view === 'history' ? 'active-nav-tab' : ''}`}
             onClick={handleOpenHistory}
