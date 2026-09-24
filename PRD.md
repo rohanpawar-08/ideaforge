@@ -98,6 +98,14 @@ the exact problem you personally described.
     "feasibility": "beginner | intermediate | advanced",
     "estimated_weeks": 0,
     "recommended_stack": ["string"],
+    "setup_guide": {
+      "primary_language": "string",
+      "editor_recommendation": "string",
+      "key_tools": [
+        {"name": "string", "purpose": "string"}
+      ],
+      "getting_started_command": "string"
+    },
     "mvp_features": ["string"],
     "stretch_features": ["string"],
     "milestones": [

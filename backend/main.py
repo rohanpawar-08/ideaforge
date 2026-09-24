@@ -56,12 +56,15 @@ SYSTEM_PROMPT = (
     "- Handling vague answers, 'I don't know', or requests for explanation:\n"
     "  * If the user's answer is vague, says 'I don't know', or asks for an explanation instead of answering, YOU MUST FIRST briefly explain that concept in plain, simple, jargon-free language (with 1-2 concrete, relatable examples or options tailored to their project idea).\n"
     "  * DO NOT repeat the exact same question. Instead, naturally continue toward the next piece of missing information or offer options/suggestions they can easily choose from.\n"
-    "- Completion: After 4 questions total, or if the user says 'just generate it', respond with the roadmap JSON instead of another question.\n\n"
+    "- Completion: After 4 questions total, or if the user says 'just generate it', respond with the roadmap JSON instead of another question.\n"
+    "- Skill Level Alignment: Keep the setup_guide consistent with the user's stated skill level from previous answers (e.g. recommend beginner-friendly tools and editors for beginners).\n\n"
     "Respond ONLY in this JSON format, nothing else:\n"
     '{"type": "question", "text": "<your plain-language explanation (if needed) and clarifying question>"}\n'
     "or\n"
     '{"type": "roadmap", "data": {"feasibility": "beginner|intermediate|advanced", "estimated_weeks": <number>, '
-    '"recommended_stack": ["<tech>"], "mvp_features": ["<feature>"], "stretch_features": ["<feature>"], '
+    '"recommended_stack": ["<tech>"], '
+    '"setup_guide": {"primary_language": "<string>", "editor_recommendation": "<string>", "key_tools": [{"name": "<string>", "purpose": "<string>"}], "getting_started_command": "<string>"}, '
+    '"mvp_features": ["<feature>"], "stretch_features": ["<feature>"], '
     '"milestones": [{"week": <number>, "goal": "<goal>", "tasks": ["<task>"]}]}}'
 )
 STAGE1_SYSTEM_PROMPT = SYSTEM_PROMPT
@@ -69,7 +72,12 @@ STAGE1_SYSTEM_PROMPT = SYSTEM_PROMPT
 
 ROADMAP_SYSTEM_PROMPT = (
     "You are a technical project planning assistant. Based on the user's project idea and previous clarifying answers, "
-    "generate a comprehensive and realistic project roadmap.\n"
+    "generate a comprehensive and realistic project roadmap.\n\n"
+    "CRITICAL REQUIREMENT — Skill Level Consistency:\n"
+    "Review the user's stated technical skill level from their previous answers. "
+    "Keep the 'setup_guide' (primary language reason, editor recommendation, key tools, and getting started command) "
+    "strictly consistent with the user's stated skill level — recommend accessible, beginner-friendly tools/editors (like VS Code or beginner-friendly CLIs) "
+    "for beginners, and appropriately advanced tools for more experienced developers.\n\n"
     "Respond ONLY in this exact JSON schema, with no additional commentary or markdown wrapping:\n"
     "{\n"
     '  "type": "roadmap",\n'
@@ -77,6 +85,17 @@ ROADMAP_SYSTEM_PROMPT = (
     '    "feasibility": "beginner|intermediate|advanced",\n'
     '    "estimated_weeks": <number>,\n'
     '    "recommended_stack": ["<tech1>", "<tech2>"],\n'
+    '    "setup_guide": {\n'
+    '      "primary_language": "<main programming language to use, with a one-line reason>",\n'
+    '      "editor_recommendation": "<code editor/IDE to use and why, e.g. VS Code, Antigravity, PyCharm>",\n'
+    '      "key_tools": [\n'
+    '        {\n'
+    '          "name": "<specific tool, framework, or package name needed beyond the main stack>",\n'
+    '          "purpose": "<specific purpose>"\n'
+    '        }\n'
+    '      ],\n'
+    '      "getting_started_command": "<very first terminal command to run to start the project, e.g. npm create vite@latest>"\n'
+    '    },\n'
     '    "mvp_features": ["<feature1>", "<feature2>"],\n'
     '    "stretch_features": ["<feature1>", "<feature2>"],\n'
     '    "milestones": [\n'
@@ -126,6 +145,35 @@ def validate_roadmap_schema(obj: dict) -> list[str]:
         val = data.get(list_field)
         if not isinstance(val, list) or not all(isinstance(x, str) for x in val):
             errors.append(f"'data.{list_field}' must be a list of strings.")
+
+    setup_guide = data.get("setup_guide")
+    if not isinstance(setup_guide, dict):
+        errors.append("'data.setup_guide' must be an object.")
+    else:
+        primary_lang = setup_guide.get("primary_language")
+        if not isinstance(primary_lang, str) or not primary_lang.strip():
+            errors.append("'data.setup_guide.primary_language' must be a non-empty string.")
+
+        editor_rec = setup_guide.get("editor_recommendation")
+        if not isinstance(editor_rec, str) or not editor_rec.strip():
+            errors.append("'data.setup_guide.editor_recommendation' must be a non-empty string.")
+
+        start_cmd = setup_guide.get("getting_started_command")
+        if not isinstance(start_cmd, str) or not start_cmd.strip():
+            errors.append("'data.setup_guide.getting_started_command' must be a non-empty string.")
+
+        key_tools = setup_guide.get("key_tools")
+        if not isinstance(key_tools, list) or len(key_tools) == 0:
+            errors.append("'data.setup_guide.key_tools' must be a non-empty list of tool objects.")
+        else:
+            for idx, tool in enumerate(key_tools):
+                if not isinstance(tool, dict):
+                    errors.append(f"'data.setup_guide.key_tools[{idx}]' must be an object.")
+                    continue
+                if not isinstance(tool.get("name"), str) or not tool.get("name").strip():
+                    errors.append(f"'data.setup_guide.key_tools[{idx}].name' must be a non-empty string.")
+                if not isinstance(tool.get("purpose"), str) or not tool.get("purpose").strip():
+                    errors.append(f"'data.setup_guide.key_tools[{idx}].purpose' must be a non-empty string.")
 
     milestones = data.get("milestones")
     if not isinstance(milestones, list) or len(milestones) == 0:
@@ -225,6 +273,17 @@ def generate_roadmap_with_validation(messages: list[dict]) -> dict:
                 '    "feasibility": "beginner|intermediate|advanced",\n'
                 '    "estimated_weeks": <number>,\n'
                 '    "recommended_stack": ["<tech1>", "<tech2>"],\n'
+                '    "setup_guide": {\n'
+                '      "primary_language": "<main programming language to use, with a one-line reason>",\n'
+                '      "editor_recommendation": "<code editor/IDE to use and why, e.g. VS Code, Antigravity, PyCharm>",\n'
+                '      "key_tools": [\n'
+                '        {\n'
+                '          "name": "<specific tool, framework, or package name needed beyond the main stack>",\n'
+                '          "purpose": "<specific purpose>"\n'
+                '        }\n'
+                '      ],\n'
+                '      "getting_started_command": "<very first terminal command to run to start the project, e.g. npm create vite@latest>"\n'
+                '    },\n'
                 '    "mvp_features": ["<feature1>", "<feature2>"],\n'
                 '    "stretch_features": ["<feature1>", "<feature2>"],\n'
                 '    "milestones": [\n'

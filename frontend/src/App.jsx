@@ -12,10 +12,31 @@ function App() {
   const [isLoading, setIsLoading] = useState(false)
   const [roadmap, setRoadmap] = useState(null)
   const [error, setError] = useState(null)
+  const [copiedCommand, setCopiedCommand] = useState(false)
 
   const chatEndRef = useRef(null)
   const inputRef = useRef(null)
   const lastRequestRef = useRef({ ideaText: '', answers: [] })
+
+  const handleCopyCommand = async (command) => {
+    if (!command) return
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(command)
+      } else {
+        const textArea = document.createElement('textarea')
+        textArea.value = command
+        document.body.appendChild(textArea)
+        textArea.select()
+        document.execCommand('copy')
+        document.body.removeChild(textArea)
+      }
+      setCopiedCommand(true)
+      setTimeout(() => setCopiedCommand(false), 2000)
+    } catch (err) {
+      console.error('Failed to copy to clipboard:', err)
+    }
+  }
 
   // Auto-scroll to bottom of chat when new messages or loading state change
   useEffect(() => {
@@ -394,6 +415,86 @@ function App() {
                 )}
               </div>
             </div>
+
+            {/* Setup Guide */}
+            {roadmap.setup_guide && (
+              <div className="setup-guide-container">
+                <div className="setup-guide-header">
+                  <div className="setup-guide-title">
+                    <span className="setup-icon">🚀</span>
+                    <h3>Developer Setup Guide</h3>
+                  </div>
+                  <span className="setup-badge">Quick Start</span>
+                </div>
+
+                {/* Getting Started Command (Copyable) */}
+                {roadmap.setup_guide.getting_started_command && (
+                  <div className="command-box">
+                    <span className="command-label">Getting Started Command</span>
+                    <div className="code-block">
+                      <div className="code-content">
+                        <span className="code-prompt">$</span>
+                        <code>{roadmap.setup_guide.getting_started_command}</code>
+                      </div>
+                      <button
+                        type="button"
+                        className={`btn-copy ${copiedCommand ? 'copied' : ''}`}
+                        onClick={() =>
+                          handleCopyCommand(roadmap.setup_guide.getting_started_command)
+                        }
+                        title="Copy command to clipboard"
+                      >
+                        {copiedCommand ? (
+                          <>
+                            <span className="copy-icon">✓</span> Copied!
+                          </>
+                        ) : (
+                          <>
+                            <span className="copy-icon">📋</span> Copy
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Meta Details: Primary Language & Editor */}
+                <div className="setup-grid">
+                  {roadmap.setup_guide.primary_language && (
+                    <div className="setup-card">
+                      <span className="setup-card-label">Primary Language</span>
+                      <p className="setup-card-value">
+                        {roadmap.setup_guide.primary_language}
+                      </p>
+                    </div>
+                  )}
+                  {roadmap.setup_guide.editor_recommendation && (
+                    <div className="setup-card">
+                      <span className="setup-card-label">Recommended Editor / IDE</span>
+                      <p className="setup-card-value">
+                        {roadmap.setup_guide.editor_recommendation}
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Key Tools List */}
+                {roadmap.setup_guide.key_tools &&
+                  roadmap.setup_guide.key_tools.length > 0 && (
+                    <div className="key-tools-section">
+                      <h4 className="key-tools-title">Key Tools & Packages</h4>
+                      <ul className="key-tools-list">
+                        {roadmap.setup_guide.key_tools.map((tool, idx) => (
+                          <li key={idx} className="tool-item">
+                            <span className="tool-name-tag">{tool.name}</span>
+                            <span className="tool-purpose">{tool.purpose}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+              </div>
+            )}
 
             {/* Timeline Milestones */}
             <div className="timeline-container">
