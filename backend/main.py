@@ -318,6 +318,77 @@ def health_check():
     return {"status": "IdeaForge backend is running"}
 
 
+@app.get("/roadmaps")
+def get_roadmaps(db: Session = Depends(get_db)):
+    try:
+        roadmaps = (
+            db.query(models.Roadmap)
+            .order_by(models.Roadmap.created_at.desc(), models.Roadmap.id.desc())
+            .all()
+        )
+        results = []
+        for r in roadmaps:
+            data_blob = r.data if isinstance(r.data, dict) else {}
+            inner_data = (
+                data_blob.get("data")
+                if isinstance(data_blob.get("data"), dict)
+                else data_blob
+            )
+            feasibility = inner_data.get("feasibility", "intermediate")
+            estimated_weeks = inner_data.get("estimated_weeks", 4)
+
+            results.append({
+                "id": r.id,
+                "original_idea": r.original_idea,
+                "summary": {
+                    "feasibility": feasibility,
+                    "estimated_weeks": estimated_weeks,
+                },
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            })
+        return results
+    except Exception as exc:
+        logger.error(f"Error fetching roadmaps: {exc}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"error": True, "detail": str(exc), "message": "Failed to fetch roadmaps."}
+        )
+
+
+@app.get("/roadmaps/{roadmap_id}")
+def get_roadmap(roadmap_id: int, db: Session = Depends(get_db)):
+    try:
+        roadmap = (
+            db.query(models.Roadmap)
+            .filter(models.Roadmap.id == roadmap_id)
+            .first()
+        )
+        if not roadmap:
+            raise HTTPException(status_code=404, detail=f"Roadmap with id {roadmap_id} not found")
+
+        data_blob = roadmap.data if isinstance(roadmap.data, dict) else {}
+        inner_data = (
+            data_blob.get("data")
+            if isinstance(data_blob.get("data"), dict)
+            else data_blob
+        )
+
+        return {
+            "id": roadmap.id,
+            "original_idea": roadmap.original_idea,
+            "created_at": roadmap.created_at.isoformat() if roadmap.created_at else None,
+            "data": inner_data,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Error fetching roadmap {roadmap_id}: {exc}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"error": True, "detail": str(exc), "message": "Failed to fetch roadmap."}
+        )
+
+
 @app.post("/plan")
 def generate_plan(request: IdeaRequest, db: Session = Depends(get_db)):
     try:

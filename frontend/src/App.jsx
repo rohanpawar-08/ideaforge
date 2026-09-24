@@ -4,6 +4,10 @@ import './App.css'
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
 function App() {
+  // Navigation view state: 'generator' | 'history' | 'saved_roadmap'
+  const [view, setView] = useState('generator')
+
+  // Generator states
   const [idea, setIdea] = useState('')
   const [hasStarted, setHasStarted] = useState(false)
   const [messages, setMessages] = useState([])
@@ -14,9 +18,29 @@ function App() {
   const [error, setError] = useState(null)
   const [copiedCommand, setCopiedCommand] = useState(false)
 
+  // History states
+  const [historyRoadmaps, setHistoryRoadmaps] = useState([])
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false)
+  const [historyError, setHistoryError] = useState(null)
+  const [isLoadingSaved, setIsLoadingSaved] = useState(false)
+
   const chatEndRef = useRef(null)
   const inputRef = useRef(null)
   const lastRequestRef = useRef({ ideaText: '', answers: [] })
+
+  const formatDate = (dateString) => {
+    if (!dateString) return ''
+    try {
+      const d = new Date(dateString)
+      return d.toLocaleDateString(undefined, {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+      })
+    } catch {
+      return dateString
+    }
+  }
 
   const handleCopyCommand = async (command) => {
     if (!command) return
@@ -40,15 +64,68 @@ function App() {
 
   // Auto-scroll to bottom of chat when new messages or loading state change
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, isLoading, roadmap, error])
+    if (view === 'generator') {
+      chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [messages, isLoading, roadmap, error, view])
 
   // Focus input field when ready for user response
   useEffect(() => {
-    if (!isLoading && !roadmap) {
+    if (view === 'generator' && !isLoading && !roadmap) {
       inputRef.current?.focus()
     }
-  }, [isLoading, roadmap, hasStarted])
+  }, [isLoading, roadmap, hasStarted, view])
+
+  // Fetch past roadmaps from backend
+  const fetchHistoryRoadmaps = async () => {
+    setIsLoadingHistory(true)
+    setHistoryError(null)
+    try {
+      const res = await fetch(`${API_URL}/roadmaps`)
+      if (!res.ok) {
+        throw new Error(`Failed to load history (Status: ${res.status})`)
+      }
+      const data = await res.json()
+      setHistoryRoadmaps(Array.isArray(data) ? data : [])
+    } catch (err) {
+      console.error('Error fetching roadmaps history:', err)
+      setHistoryError('Could not load past roadmaps. Please try again.')
+    } finally {
+      setIsLoadingHistory(false)
+    }
+  }
+
+  // Open history view
+  const handleOpenHistory = async () => {
+    setView('history')
+    await fetchHistoryRoadmaps()
+  }
+
+  // Select a saved roadmap card to view full roadmap
+  const handleSelectRoadmap = async (id) => {
+    setIsLoadingSaved(true)
+    setHistoryError(null)
+    try {
+      const res = await fetch(`${API_URL}/roadmaps/${id}`)
+      if (!res.ok) {
+        throw new Error(`Failed to fetch roadmap ${id}`)
+      }
+      const data = await res.json()
+      const innerData = data.data || data
+      setRoadmap({
+        ...innerData,
+        id: data.id,
+        original_idea: data.original_idea,
+        created_at: data.created_at,
+      })
+      setView('saved_roadmap')
+    } catch (err) {
+      console.error('Failed to load roadmap details:', err)
+      setHistoryError('Could not open the selected roadmap. Please try again.')
+    } finally {
+      setIsLoadingSaved(false)
+    }
+  }
 
   const sendToBackend = async (ideaText, answers) => {
     setIsLoading(true)
@@ -91,7 +168,10 @@ function App() {
         ])
       } else if (data.type === 'roadmap') {
         const roadmapData = data.data || data
-        setRoadmap(roadmapData)
+        setRoadmap({
+          ...roadmapData,
+          original_idea: ideaText,
+        })
         setMessages((prev) => [
           ...prev,
           {
@@ -117,6 +197,7 @@ function App() {
     const trimmed = idea.trim()
     if (!trimmed || isLoading) return
 
+    setView('generator')
     setHasStarted(true)
     setMessages([{ role: 'user', text: trimmed }])
     await sendToBackend(trimmed, [])
@@ -143,6 +224,7 @@ function App() {
 
   // Reset to start a new idea
   const handleReset = () => {
+    setView('generator')
     setIdea('')
     setHasStarted(false)
     setMessages([])
@@ -163,185 +245,179 @@ function App() {
     }
   }
 
+  const isShowingRoadmap =
+    (view === 'generator' && Boolean(roadmap)) || view === 'saved_roadmap'
+
   return (
     <div className="app-container">
       {/* Header */}
       <header className="app-header">
-        <div className="header-brand">
+        <div
+          className="header-brand"
+          onClick={handleReset}
+          style={{ cursor: 'pointer' }}
+          title="Back to Generator"
+        >
           <div className="brand-badge">⚡ IdeaForge</div>
           <h1>Technical Roadmap Generator</h1>
           <p>Turn a rough project idea into an actionable, week-by-week build plan.</p>
         </div>
-        {hasStarted && (
-          <button className="btn-secondary btn-sm" onClick={handleReset}>
+        <div className="header-actions">
+          <button
+            className={`btn-secondary btn-sm ${view === 'history' ? 'active-nav-tab' : ''}`}
+            onClick={handleOpenHistory}
+            id="btn-history"
+          >
+            📜 History
+          </button>
+          <button
+            className={`btn-secondary btn-sm ${view === 'generator' && !hasStarted ? 'active-nav-tab' : ''}`}
+            onClick={handleReset}
+            id="btn-new-idea"
+          >
             ↺ New Idea
           </button>
-        )}
+        </div>
       </header>
 
       {/* Main Content Area */}
       <main className="main-content">
-        {!hasStarted ? (
-          /* Step 1: Initial Idea Form */
-          <section className="initial-card">
-            <label htmlFor="idea-input" className="input-label">
-              What do you want to build?
-            </label>
-            <p className="input-hint">
-              Describe your idea in a few sentences. Don&apos;t worry about being perfect—our AI assistant will ask up to 4 quick clarifying questions to scope it.
-            </p>
-            <textarea
-              id="idea-input"
-              value={idea}
-              onChange={(e) => setIdea(e.target.value)}
-              placeholder="e.g. A micro-habits tracker for students that sends gentle Discord notifications and uses streaks..."
-              rows={4}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                  handleStart(e)
-                }
-              }}
-            />
-
-            <div className="quick-suggestions">
-              <span className="suggestions-label">Try an example:</span>
+        {/* VIEW 1: Roadmap History View */}
+        {view === 'history' && (
+          <section className="history-section">
+            <div className="history-header">
+              <div className="history-title-block">
+                <h2>Roadmap History</h2>
+                <p>Browse previously generated technical roadmaps and review timelines.</p>
+              </div>
               <button
-                type="button"
-                className="chip-btn"
-                onClick={() =>
-                  handleQuickPrompt(
-                    'A web app for students to find study groups on campus based on courses and schedule.'
-                  )
-                }
+                className="btn-primary btn-sm"
+                onClick={handleReset}
+                id="btn-history-new-idea"
               >
-                🎓 Campus Study Group Finder
-              </button>
-              <button
-                type="button"
-                className="chip-btn"
-                onClick={() =>
-                  handleQuickPrompt(
-                    'A minimalist personal finance dashboard that tracks subscription expenses and alerts before renewals.'
-                  )
-                }
-              >
-                💳 Subscription Renewal Tracker
-              </button>
-              <button
-                type="button"
-                className="chip-btn"
-                onClick={() =>
-                  handleQuickPrompt(
-                    'An AI flashcard generator that turns YouTube lecture transcripts into spaced repetition cards.'
-                  )
-                }
-              >
-                🧠 YouTube Lecture Flashcards
+                + New Idea
               </button>
             </div>
 
-            {error && (
+            {isLoadingHistory && (
+              <div className="history-loading">
+                <span className="dot-pulse"></span>
+                <span>Loading saved roadmaps...</span>
+              </div>
+            )}
+
+            {historyError && (
               <div className="error-banner">
-                <div className="error-text">⚠️ {error}</div>
-                <button className="btn-retry" type="button" onClick={handleRetry}>
+                <div className="error-text">⚠️ {historyError}</div>
+                <button
+                  className="btn-retry"
+                  type="button"
+                  onClick={fetchHistoryRoadmaps}
+                >
                   Retry
                 </button>
               </div>
             )}
 
-            <div className="form-actions">
-              <button
-                className="btn-primary"
-                onClick={handleStart}
-                disabled={!idea.trim() || isLoading}
-              >
-                {isLoading ? 'Starting...' : 'Start Scoping →'}
-              </button>
-            </div>
-          </section>
-        ) : (
-          /* Step 2: Conversation View */
-          <section className="chat-section">
-            <div className="chat-messages">
-              {messages.map((msg, index) => (
-                <div
-                  key={index}
-                  className={`message-row ${
-                    msg.role === 'user' ? 'message-user' : 'message-assistant'
-                  }`}
-                >
-                  <div className="message-avatar">
-                    {msg.role === 'user' ? 'You' : 'AI'}
-                  </div>
-                  <div className="message-bubble">{msg.text}</div>
-                </div>
-              ))}
-
-              {isLoading && (
-                <div className="message-row message-assistant">
-                  <div className="message-avatar">AI</div>
-                  <div className="message-bubble loading-bubble">
-                    <span className="dot-pulse"></span>
-                    <span className="loading-text">
-                      {previousAnswers.length >= 3
-                        ? 'Synthesizing your full project roadmap...'
-                        : 'Thinking of clarifying questions...'}
-                    </span>
-                  </div>
-                </div>
-              )}
-
-              {error && (
-                <div className="error-banner">
-                  <div className="error-text">⚠️ {error}</div>
-                  <button className="btn-retry" type="button" onClick={handleRetry}>
-                    Retry
-                  </button>
-                </div>
-              )}
-
-              <div ref={chatEndRef} />
-            </div>
-
-            {/* Chat Input Bar (only shown when roadmap is not yet finished) */}
-            {!roadmap && (
-              <form className="chat-input-bar" onSubmit={handleSendAnswer}>
-                <input
-                  ref={inputRef}
-                  type="text"
-                  value={inputValue}
-                  onChange={(e) => setInputValue(e.target.value)}
-                  placeholder="Type your answer here... (or type 'just generate it')"
-                  disabled={isLoading}
-                />
-                <button
-                  type="submit"
-                  className="btn-primary"
-                  disabled={!inputValue.trim() || isLoading}
-                >
-                  Send
+            {!isLoadingHistory && !historyError && historyRoadmaps.length === 0 && (
+              <div className="history-empty-state">
+                <div className="empty-icon">📂</div>
+                <h3>No saved roadmaps yet</h3>
+                <p>Generate your first technical roadmap to see it listed here.</p>
+                <button className="btn-primary" onClick={handleReset}>
+                  Generate Your First Roadmap →
                 </button>
-              </form>
+              </div>
             )}
-            {!roadmap && (
-              <div className="chat-tips">
-                <span>
-                  Tip: Answer simply, or type <em>&ldquo;just generate it&rdquo;</em> to skip ahead immediately.
-                </span>
-                <span className="progress-badge">
-                  Question {previousAnswers.length} of 4 answered
-                </span>
+
+            {!isLoadingHistory && !historyError && historyRoadmaps.length > 0 && (
+              <div className="history-grid">
+                {historyRoadmaps.map((item) => (
+                  <div
+                    key={item.id}
+                    id={`history-card-${item.id}`}
+                    className="history-card"
+                    onClick={() => handleSelectRoadmap(item.id)}
+                    tabIndex={0}
+                    role="button"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        handleSelectRoadmap(item.id)
+                      }
+                    }}
+                  >
+                    <div className="history-card-top">
+                      <span
+                        className={`badge badge-feasibility feasibility-${(
+                          item.summary?.feasibility || 'intermediate'
+                        ).toLowerCase()}`}
+                      >
+                        {(item.summary?.feasibility || 'INTERMEDIATE').toUpperCase()}
+                      </span>
+                      <span className="history-card-date">
+                        {formatDate(item.created_at)}
+                      </span>
+                    </div>
+
+                    <h3 className="history-card-idea">{item.original_idea}</h3>
+
+                    <div className="history-card-footer">
+                      <span className="history-card-weeks">
+                        ⏱️ {item.summary?.estimated_weeks || 4}{' '}
+                        {item.summary?.estimated_weeks === 1 ? 'Week' : 'Weeks'}
+                      </span>
+                      <span className="history-card-view-link">
+                        View Roadmap →
+                      </span>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </section>
         )}
 
-        {/* Step 3: Roadmap Timeline View */}
-        {roadmap && (
+        {/* Loading overlay when loading saved roadmap */}
+        {isLoadingSaved && (
+          <div className="history-loading">
+            <span className="dot-pulse"></span>
+            <span>Loading roadmap details...</span>
+          </div>
+        )}
+
+        {/* VIEW 2: Roadmap Timeline View (Shared by fresh generation & saved roadmap) */}
+        {!isLoadingSaved && isShowingRoadmap && (
           <section className="roadmap-section">
+            {/* Back to History bar when viewing a saved roadmap */}
+            {view === 'saved_roadmap' && (
+              <div className="saved-roadmap-toolbar">
+                <button
+                  type="button"
+                  className="btn-secondary btn-sm btn-back"
+                  onClick={() => setView('history')}
+                  id="btn-back-to-history"
+                >
+                  ← Back to History
+                </button>
+                {roadmap.created_at && (
+                  <span className="saved-date-tag">
+                    Saved on {formatDate(roadmap.created_at)}
+                  </span>
+                )}
+              </div>
+            )}
+
             <div className="roadmap-header">
               <div className="roadmap-title-row">
-                <h2>Project Roadmap</h2>
+                <div>
+                  <h2>Project Roadmap</h2>
+                  {(roadmap.original_idea || idea) && (
+                    <p className="roadmap-original-idea">
+                      <strong>Target Project:</strong> &ldquo;{roadmap.original_idea || idea}&rdquo;
+                    </p>
+                  )}
+                </div>
                 <button className="btn-secondary btn-sm" onClick={handleReset}>
                   Plan Another Project
                 </button>
@@ -529,6 +605,162 @@ function App() {
               </div>
             </div>
           </section>
+        )}
+
+        {/* VIEW 3: Generator Views (Initial Input Form or Clarifying Chat) */}
+        {!isShowingRoadmap && view === 'generator' && (
+          <>
+            {!hasStarted ? (
+              /* Step 1: Initial Idea Form */
+              <section className="initial-card">
+                <label htmlFor="idea-input" className="input-label">
+                  What do you want to build?
+                </label>
+                <p className="input-hint">
+                  Describe your idea in a few sentences. Don&apos;t worry about being perfect—our AI assistant will ask up to 4 quick clarifying questions to scope it.
+                </p>
+                <textarea
+                  id="idea-input"
+                  value={idea}
+                  onChange={(e) => setIdea(e.target.value)}
+                  placeholder="e.g. A micro-habits tracker for students that sends gentle Discord notifications and uses streaks..."
+                  rows={4}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                      handleStart(e)
+                    }
+                  }}
+                />
+
+                <div className="quick-suggestions">
+                  <span className="suggestions-label">Try an example:</span>
+                  <button
+                    type="button"
+                    className="chip-btn"
+                    onClick={() =>
+                      handleQuickPrompt(
+                        'A web app for students to find study groups on campus based on courses and schedule.'
+                      )
+                    }
+                  >
+                    🎓 Campus Study Group Finder
+                  </button>
+                  <button
+                    type="button"
+                    className="chip-btn"
+                    onClick={() =>
+                      handleQuickPrompt(
+                        'A minimalist personal finance dashboard that tracks subscription expenses and alerts before renewals.'
+                      )
+                    }
+                  >
+                    💳 Subscription Renewal Tracker
+                  </button>
+                  <button
+                    type="button"
+                    className="chip-btn"
+                    onClick={() =>
+                      handleQuickPrompt(
+                        'An AI flashcard generator that turns YouTube lecture transcripts into spaced repetition cards.'
+                      )
+                    }
+                  >
+                    🧠 YouTube Lecture Flashcards
+                  </button>
+                </div>
+
+                {error && (
+                  <div className="error-banner">
+                    <div className="error-text">⚠️ {error}</div>
+                    <button className="btn-retry" type="button" onClick={handleRetry}>
+                      Retry
+                    </button>
+                  </div>
+                )}
+
+                <div className="form-actions">
+                  <button
+                    className="btn-primary"
+                    onClick={handleStart}
+                    disabled={!idea.trim() || isLoading}
+                  >
+                    {isLoading ? 'Starting...' : 'Start Scoping →'}
+                  </button>
+                </div>
+              </section>
+            ) : (
+              /* Step 2: Conversation View */
+              <section className="chat-section">
+                <div className="chat-messages">
+                  {messages.map((msg, index) => (
+                    <div
+                      key={index}
+                      className={`message-row ${
+                        msg.role === 'user' ? 'message-user' : 'message-assistant'
+                      }`}
+                    >
+                      <div className="message-avatar">
+                        {msg.role === 'user' ? 'You' : 'AI'}
+                      </div>
+                      <div className="message-bubble">{msg.text}</div>
+                    </div>
+                  ))}
+
+                  {isLoading && (
+                    <div className="message-row message-assistant">
+                      <div className="message-avatar">AI</div>
+                      <div className="message-bubble loading-bubble">
+                        <span className="dot-pulse"></span>
+                        <span className="loading-text">
+                          {previousAnswers.length >= 3
+                            ? 'Synthesizing your full project roadmap...'
+                            : 'Thinking of clarifying questions...'}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {error && (
+                    <div className="error-banner">
+                      <div className="error-text">⚠️ {error}</div>
+                      <button className="btn-retry" type="button" onClick={handleRetry}>
+                        Retry
+                      </button>
+                    </div>
+                  )}
+
+                  <div ref={chatEndRef} />
+                </div>
+
+                {/* Chat Input Bar */}
+                <form className="chat-input-bar" onSubmit={handleSendAnswer}>
+                  <input
+                    ref={inputRef}
+                    type="text"
+                    value={inputValue}
+                    onChange={(e) => setInputValue(e.target.value)}
+                    placeholder="Type your answer here... (or type 'just generate it')"
+                    disabled={isLoading}
+                  />
+                  <button
+                    type="submit"
+                    className="btn-primary"
+                    disabled={!inputValue.trim() || isLoading}
+                  >
+                    Send
+                  </button>
+                </form>
+                <div className="chat-tips">
+                  <span>
+                    Tip: Answer simply, or type <em>&ldquo;just generate it&rdquo;</em> to skip ahead immediately.
+                  </span>
+                  <span className="progress-badge">
+                    Question {previousAnswers.length} of 4 answered
+                  </span>
+                </div>
+              </section>
+            )}
+          </>
         )}
       </main>
     </div>
