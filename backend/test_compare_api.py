@@ -1,6 +1,7 @@
 import requests
 import json
 import sys
+import time
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -10,13 +11,25 @@ BASE_URL = "http://127.0.0.1:8000"
 def run_tests():
     print("=== Testing POST /compare API ===")
 
+    # 0. Test unauthenticated request (expect 401)
+    unauth_resp = requests.post(f"{BASE_URL}/compare", json={"ideas": ["Idea 1", "Idea 2"]})
+    assert unauth_resp.status_code == 401, f"Expected 401 for unauthenticated /compare, got {unauth_resp.status_code}"
+    print("[PASS] Unauthenticated request to /compare rejected with HTTP 401.")
+
+    # Signup / login for auth token
+    user_email = f"compare_user_{int(time.time())}@example.com"
+    signup_res = requests.post(f"{BASE_URL}/auth/signup", json={"email": user_email, "password": "password123"})
+    assert signup_res.status_code == 200, f"Signup failed: {signup_res.text}"
+    token = signup_res.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
     # 1. Validation test: less than 2 ideas
-    resp_invalid_few = requests.post(f"{BASE_URL}/compare", json={"ideas": ["Just one idea"]})
+    resp_invalid_few = requests.post(f"{BASE_URL}/compare", json={"ideas": ["Just one idea"]}, headers=headers)
     assert resp_invalid_few.status_code == 400, f"Expected 400 for < 2 ideas, got {resp_invalid_few.status_code}"
     print("[PASS] Successfully rejected payload with fewer than 2 ideas (HTTP 400).")
 
     # 2. Validation test: more than 3 ideas
-    resp_invalid_many = requests.post(f"{BASE_URL}/compare", json={"ideas": ["Idea 1", "Idea 2", "Idea 3", "Idea 4"]})
+    resp_invalid_many = requests.post(f"{BASE_URL}/compare", json={"ideas": ["Idea 1", "Idea 2", "Idea 3", "Idea 4"]}, headers=headers)
     assert resp_invalid_many.status_code == 400, f"Expected 400 for > 3 ideas, got {resp_invalid_many.status_code}"
     print("[PASS] Successfully rejected payload with more than 3 ideas (HTTP 400).")
 
@@ -28,7 +41,7 @@ def run_tests():
     ]
 
     payload = {"ideas": ideas}
-    resp = requests.post(f"{BASE_URL}/compare", json=payload, timeout=60)
+    resp = requests.post(f"{BASE_URL}/compare", json=payload, headers=headers, timeout=60)
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
 
     data = resp.json()
@@ -62,6 +75,7 @@ def run_tests():
     resp_2 = requests.post(
         f"{BASE_URL}/compare",
         json={"ideas": [ideas[0], ideas[1]]},
+        headers=headers,
         timeout=60
     )
     if resp_2.status_code != 200:

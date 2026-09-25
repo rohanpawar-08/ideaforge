@@ -1,12 +1,20 @@
 import json
 import logging
 import os
+from datetime import datetime, timedelta, timezone
+from typing import Optional
+
+import bcrypt
+import jwt
 import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from sqlalchemy import text
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from database import engine, Base, get_db
 from schemas import (
@@ -15,8 +23,9 @@ from schemas import (
     CompareRequest,
     AskRequest,
     ApplyChangeRequest,
+    UserAuthRequest,
+    TokenResponse,
 )
-from sqlalchemy.orm.attributes import flag_modified
 import models
 
 logging.basicConfig(
@@ -27,7 +36,78 @@ logger = logging.getLogger("ideaforge")
 
 load_dotenv()
 
+SECRET_KEY = os.getenv("SECRET_KEY", "ideaforge_jwt_super_secret_key_2026_x99a8b7c6d5e4f3a2b1c")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_DAYS = 30
+
+security = HTTPBearer(auto_error=False)
+
+
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    try:
+        return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
+    except Exception:
+        return False
+
+
+def create_access_token(user_id: int, email: str) -> str:
+    expires = datetime.now(timezone.utc) + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
+    payload = {
+        "sub": str(user_id),
+        "email": email,
+        "exp": expires,
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def decode_access_token(token: str) -> dict:
+    return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+
+
+def get_current_user(
+    auth: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    db: Session = Depends(get_db),
+) -> models.User:
+    credentials_exception = HTTPException(
+        status_code=401,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    if not auth or not auth.credentials:
+        raise credentials_exception
+
+    token = auth.credentials.strip()
+    try:
+        payload = decode_access_token(token)
+        user_id_str = payload.get("sub")
+        if not user_id_str:
+            raise credentials_exception
+        user_id = int(user_id_str)
+    except Exception:
+        raise credentials_exception
+
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise credentials_exception
+
+    return user
+
+
 Base.metadata.create_all(bind=engine)
+try:
+    with engine.connect() as conn:
+        conn.execute(
+            text(
+                "ALTER TABLE roadmaps ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id)"
+            )
+        )
+        conn.commit()
+except Exception as migration_err:
+    logger.info(f"Database migration notice: {migration_err}")
 
 app = FastAPI(title="IdeaForge API")
 
@@ -325,11 +405,56 @@ def health_check():
     return {"status": "IdeaForge backend is running"}
 
 
+@app.post("/auth/signup", response_model=TokenResponse)
+def signup(req: UserAuthRequest, db: Session = Depends(get_db)):
+    email = (req.email or "").strip().lower()
+    password = req.password or ""
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="Invalid email address.")
+    if len(password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
+
+    existing = db.query(models.User).filter(models.User.email == email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="An account with this email already exists.")
+
+    hashed = hash_password(password)
+    user = models.User(email=email, hashed_password=hashed)
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    token = create_access_token(user.id, user.email)
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+    }
+
+
+@app.post("/auth/login", response_model=TokenResponse)
+def login(req: UserAuthRequest, db: Session = Depends(get_db)):
+    email = (req.email or "").strip().lower()
+    password = req.password or ""
+    user = db.query(models.User).filter(models.User.email == email).first()
+    if not user or not verify_password(password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+    token = create_access_token(user.id, user.email)
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+    }
+
+
 @app.get("/roadmaps")
-def get_roadmaps(db: Session = Depends(get_db)):
+def get_roadmaps(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
     try:
         roadmaps = (
             db.query(models.Roadmap)
+            .filter(models.Roadmap.user_id == current_user.id)
             .order_by(models.Roadmap.created_at.desc(), models.Roadmap.id.desc())
             .all()
         )
@@ -363,11 +488,18 @@ def get_roadmaps(db: Session = Depends(get_db)):
 
 
 @app.get("/roadmaps/{roadmap_id}")
-def get_roadmap(roadmap_id: int, db: Session = Depends(get_db)):
+def get_roadmap(
+    roadmap_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
     try:
         roadmap = (
             db.query(models.Roadmap)
-            .filter(models.Roadmap.id == roadmap_id)
+            .filter(
+                models.Roadmap.id == roadmap_id,
+                models.Roadmap.user_id == current_user.id,
+            )
             .first()
         )
         if not roadmap:
@@ -401,6 +533,7 @@ def regenerate_roadmap_section(
     roadmap_id: int,
     request: RegenerateRequest,
     db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
 ):
     section_raw = (request.section or "").strip().lower()
     if section_raw in ["stack", "recommended_stack"]:
@@ -417,7 +550,10 @@ def regenerate_roadmap_section(
 
     roadmap = (
         db.query(models.Roadmap)
-        .filter(models.Roadmap.id == roadmap_id)
+        .filter(
+            models.Roadmap.id == roadmap_id,
+            models.Roadmap.user_id == current_user.id,
+        )
         .first()
     )
     if not roadmap:
@@ -570,10 +706,14 @@ def ask_about_roadmap(
     roadmap_id: int,
     request: AskRequest,
     db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
 ):
     roadmap = (
         db.query(models.Roadmap)
-        .filter(models.Roadmap.id == roadmap_id)
+        .filter(
+            models.Roadmap.id == roadmap_id,
+            models.Roadmap.user_id == current_user.id,
+        )
         .first()
     )
     if not roadmap:
@@ -671,10 +811,14 @@ def apply_roadmap_change(
     roadmap_id: int,
     request: ApplyChangeRequest,
     db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
 ):
     roadmap = (
         db.query(models.Roadmap)
-        .filter(models.Roadmap.id == roadmap_id)
+        .filter(
+            models.Roadmap.id == roadmap_id,
+            models.Roadmap.user_id == current_user.id,
+        )
         .first()
     )
     if not roadmap:
@@ -723,7 +867,10 @@ def apply_roadmap_change(
 
 
 @app.post("/compare")
-def compare_ideas(request: CompareRequest):
+def compare_ideas(
+    request: CompareRequest,
+    current_user: models.User = Depends(get_current_user),
+):
     raw_ideas = [i.strip() for i in (request.ideas or []) if i and i.strip()]
     if len(raw_ideas) < 2 or len(raw_ideas) > 3:
         raise HTTPException(
@@ -768,7 +915,15 @@ def compare_ideas(request: CompareRequest):
 
     try:
         data = call_groq_llm(messages)
-        comparisons = data.get("comparisons")
+        comparisons = (
+            data.get("comparisons")
+            or data.get("ideas")
+            or data.get("comparison")
+            or (data if isinstance(data, list) else None)
+        )
+        if isinstance(comparisons, dict):
+            comparisons = list(comparisons.values())
+
         if not isinstance(comparisons, list) or len(comparisons) < 2:
             raise ValueError("Malformed response: 'comparisons' must be a list with at least 2 entries")
 
@@ -804,7 +959,11 @@ def compare_ideas(request: CompareRequest):
 
 
 @app.post("/plan")
-def generate_plan(request: IdeaRequest, db: Session = Depends(get_db)):
+def generate_plan(
+    request: IdeaRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
     try:
         previous_answers = request.previous_answers or []
         user_content = f"Project idea: {request.idea}"
@@ -828,6 +987,7 @@ def generate_plan(request: IdeaRequest, db: Session = Depends(get_db)):
             roadmap_response = generate_roadmap_with_validation(messages)
             try:
                 roadmap_record = models.Roadmap(
+                    user_id=current_user.id,
                     original_idea=request.idea,
                     data=roadmap_response.get("data", roadmap_response),
                 )
@@ -853,6 +1013,7 @@ def generate_plan(request: IdeaRequest, db: Session = Depends(get_db)):
                     response = generate_roadmap_with_validation(messages)
                 try:
                     roadmap_record = models.Roadmap(
+                        user_id=current_user.id,
                         original_idea=request.idea,
                         data=response.get("data", response),
                     )

@@ -24,3 +24,13 @@ class AskRequest(BaseModel):
 class ApplyChangeRequest(BaseModel):
     section: str
     data: object
+
+
+class UserAuthRequest(BaseModel):
+    email: str
+    password: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"

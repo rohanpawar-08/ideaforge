@@ -5,6 +5,29 @@ import './App.css'
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
 function App() {
+  // Authentication states
+  const [token, setToken] = useState(() => {
+    try {
+      return localStorage.getItem('ideaforge_token') || ''
+    } catch (e) {
+      console.warn(e)
+      return ''
+    }
+  })
+  const [currentUserEmail, setCurrentUserEmail] = useState(() => {
+    try {
+      return localStorage.getItem('ideaforge_user_email') || ''
+    } catch (e) {
+      console.warn(e)
+      return ''
+    }
+  })
+  const [authMode, setAuthMode] = useState('login') // 'login' | 'signup'
+  const [authEmail, setAuthEmail] = useState('')
+  const [authPassword, setAuthPassword] = useState('')
+  const [authLoading, setAuthLoading] = useState(false)
+  const [authError, setAuthError] = useState(null)
+
   // Navigation view state: 'generator' | 'history' | 'saved_roadmap'
   const [view, setView] = useState('generator')
 
@@ -100,8 +123,9 @@ function App() {
   const inputRef = useRef(null)
   const lastRequestRef = useRef({ ideaText: '', answers: [] })
 
-  // Restore active roadmap across page reloads
+  // Restore active roadmap across page reloads (only when authenticated)
   useEffect(() => {
+    if (!token) return
     try {
       const savedRoadmap = localStorage.getItem('ideaforge_active_roadmap')
       const savedRoadmapId = localStorage.getItem('ideaforge_active_roadmap_id')
@@ -114,7 +138,7 @@ function App() {
     } catch (err) {
       console.warn('Could not restore active roadmap from localStorage:', err)
     }
-  }, [])
+  }, [token])
 
   // Sync checked tasks state from localStorage whenever roadmap changes
   useEffect(() => {
@@ -217,6 +241,113 @@ function App() {
     }
   }
 
+  // Logout handler: clears credentials, active roadmap, and resets view
+  const handleLogout = () => {
+    try {
+      localStorage.removeItem('ideaforge_token')
+      localStorage.removeItem('ideaforge_user_email')
+      localStorage.removeItem('ideaforge_active_roadmap')
+      localStorage.removeItem('ideaforge_active_roadmap_id')
+      localStorage.removeItem('ideaforge_active_view')
+    } catch (e) {
+      console.warn('Error clearing localStorage on logout:', e)
+    }
+    setToken('')
+    setCurrentUserEmail('')
+    setRoadmap(null)
+    setCheckedTasks({})
+    setHistoryRoadmaps([])
+    setHasStarted(false)
+    setMessages([])
+    setPreviousAnswers([])
+    setIdea('')
+    setInputValue('')
+    setError(null)
+    setComparisonResult(null)
+    setCompareError(null)
+    setRoadmapChatMessages([])
+    setRoadmapChatInput('')
+    setRoadmapChatError(null)
+    setView('generator')
+    setAuthError(null)
+  }
+
+  // Centralized authenticated fetch helper
+  // Automatically attaches Authorization: Bearer <token>
+  // Automatically clears token and redirects to login if 401 is received
+  const authFetch = async (url, options = {}) => {
+    const currentToken = token || localStorage.getItem('ideaforge_token')
+    const headers = {
+      ...(options.headers || {}),
+    }
+    if (currentToken) {
+      headers['Authorization'] = `Bearer ${currentToken}`
+    }
+    const res = await fetch(url, {
+      ...options,
+      headers,
+    })
+    if (res.status === 401) {
+      handleLogout()
+      throw new Error('Your session has expired or is unauthorized. Please log in again.')
+    }
+    return res
+  }
+
+  // Handle Login & Signup form submissions
+  const handleAuthSubmit = async (e) => {
+    e?.preventDefault()
+    const email = authEmail.trim()
+    const password = authPassword.trim()
+    if (!email || !password) {
+      setAuthError('Please enter both email and password.')
+      return
+    }
+    if (authMode === 'signup' && password.length < 6) {
+      setAuthError('Password must be at least 6 characters.')
+      return
+    }
+
+    setAuthLoading(true)
+    setAuthError(null)
+
+    try {
+      const endpoint =
+        authMode === 'signup' ? `${API_URL}/auth/signup` : `${API_URL}/auth/login`
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      })
+
+      const data = await res.json().catch(() => null)
+      if (!res.ok) {
+        throw new Error(data?.detail || `Authentication failed (${res.status})`)
+      }
+
+      if (!data?.access_token) {
+        throw new Error('No access token received from server.')
+      }
+
+      try {
+        localStorage.setItem('ideaforge_token', data.access_token)
+        localStorage.setItem('ideaforge_user_email', email)
+      } catch (e) {
+        console.warn('Could not store token in localStorage:', e)
+      }
+
+      setToken(data.access_token)
+      setCurrentUserEmail(email)
+      setAuthPassword('')
+      setAuthError(null)
+    } catch (err) {
+      console.error('Auth error:', err)
+      setAuthError(err.message || 'Authentication failed. Please try again.')
+    } finally {
+      setAuthLoading(false)
+    }
+  }
+
   // Regenerate an individual section of the roadmap
   const handleRegenerateSection = async (sectionKey) => {
     if (!roadmap?.id) {
@@ -228,7 +359,7 @@ function App() {
     setRegenerateError(null)
 
     try {
-      const res = await fetch(`${API_URL}/roadmaps/${roadmap.id}/regenerate`, {
+      const res = await authFetch(`${API_URL}/roadmaps/${roadmap.id}/regenerate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -292,7 +423,7 @@ function App() {
     setIsLoadingHistory(true)
     setHistoryError(null)
     try {
-      const res = await fetch(`${API_URL}/roadmaps`)
+      const res = await authFetch(`${API_URL}/roadmaps`)
       if (!res.ok) {
         throw new Error(`Failed to load history (Status: ${res.status})`)
       }
@@ -317,7 +448,7 @@ function App() {
     setIsLoadingSaved(true)
     setHistoryError(null)
     try {
-      const res = await fetch(`${API_URL}/roadmaps/${id}`)
+      const res = await authFetch(`${API_URL}/roadmaps/${id}`)
       if (!res.ok) {
         throw new Error(`Failed to fetch roadmap ${id}`)
       }
@@ -352,7 +483,7 @@ function App() {
     lastRequestRef.current = { ideaText, answers }
 
     try {
-      const res = await fetch(`${API_URL}/plan`, {
+      const res = await authFetch(`${API_URL}/plan`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -521,7 +652,7 @@ function App() {
     setCompareError(null)
 
     try {
-      const res = await fetch(`${API_URL}/compare`, {
+      const res = await authFetch(`${API_URL}/compare`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ideas: validIdeas }),
@@ -573,7 +704,7 @@ function App() {
     setRoadmapChatError(null)
 
     try {
-      const res = await fetch(`${API_URL}/roadmaps/${roadmap.id}/ask`, {
+      const res = await authFetch(`${API_URL}/roadmaps/${roadmap.id}/ask`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: textToSend }),
@@ -608,7 +739,7 @@ function App() {
     setRoadmapChatError(null)
 
     try {
-      const res = await fetch(`${API_URL}/roadmaps/${roadmap.id}/apply-change`, {
+      const res = await authFetch(`${API_URL}/roadmaps/${roadmap.id}/apply-change`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -695,6 +826,11 @@ function App() {
           <p>Turn a rough project idea into an actionable, week-by-week build plan.</p>
         </div>
         <div className="header-actions">
+          {token && currentUserEmail && (
+            <span className="user-badge" title={`Signed in as ${currentUserEmail}`}>
+              👤 {currentUserEmail}
+            </span>
+          )}
           <button
             type="button"
             className="btn-theme-toggle"
@@ -705,26 +841,148 @@ function App() {
           >
             {theme === 'dark' ? '☀️' : '🌙'}
           </button>
-          <button
-            className={`btn-secondary btn-sm ${view === 'history' ? 'active-nav-tab' : ''}`}
-            onClick={handleOpenHistory}
-            id="btn-history"
-          >
-            📜 History
-          </button>
-          <button
-            className={`btn-secondary btn-sm ${view === 'generator' && !hasStarted ? 'active-nav-tab' : ''}`}
-            onClick={handleReset}
-            id="btn-new-idea"
-          >
-            ↺ New Idea
-          </button>
+          {token && (
+            <>
+              <button
+                className={`btn-secondary btn-sm ${view === 'history' ? 'active-nav-tab' : ''}`}
+                onClick={handleOpenHistory}
+                id="btn-history"
+              >
+                📜 History
+              </button>
+              <button
+                className={`btn-secondary btn-sm ${view === 'generator' && !hasStarted ? 'active-nav-tab' : ''}`}
+                onClick={handleReset}
+                id="btn-new-idea"
+              >
+                ↺ New Idea
+              </button>
+              <button
+                className="btn-secondary btn-sm btn-logout"
+                onClick={handleLogout}
+                id="btn-logout"
+                title="Log out of IdeaForge"
+              >
+                🚪 Log out
+              </button>
+            </>
+          )}
         </div>
       </header>
 
       {/* Main Content Area */}
       <main className="main-content">
-        {/* VIEW 1: Roadmap History View */}
+        {!token ? (
+          <section className="auth-card-container">
+            <div className="auth-card">
+              <div className="auth-header">
+                <div className="auth-icon-badge">
+                  {authMode === 'login' ? '🔐' : '✨'}
+                </div>
+                <h2>{authMode === 'login' ? 'Welcome Back' : 'Create an Account'}</h2>
+                <p>
+                  {authMode === 'login'
+                    ? 'Sign in to access and manage your personalized project roadmaps.'
+                    : 'Join IdeaForge to turn rough project ideas into structured timelines.'}
+                </p>
+              </div>
+
+              {authError && (
+                <div className="auth-error-banner" role="alert">
+                  <span className="error-icon">⚠️</span>
+                  <span>{authError}</span>
+                </div>
+              )}
+
+              <form onSubmit={handleAuthSubmit} className="auth-form" noValidate>
+                <div className="form-group">
+                  <label htmlFor="auth-email">Email Address</label>
+                  <input
+                    id="auth-email"
+                    type="email"
+                    value={authEmail}
+                    onChange={(e) => setAuthEmail(e.target.value)}
+                    placeholder="developer@example.com"
+                    autoComplete="email"
+                    required
+                    disabled={authLoading}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="auth-password">Password</label>
+                  <input
+                    id="auth-password"
+                    type="password"
+                    value={authPassword}
+                    onChange={(e) => setAuthPassword(e.target.value)}
+                    placeholder={
+                      authMode === 'signup'
+                        ? 'At least 6 characters'
+                        : 'Enter your password'
+                    }
+                    autoComplete={
+                      authMode === 'login' ? 'current-password' : 'new-password'
+                    }
+                    required
+                    disabled={authLoading}
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  id="btn-auth-submit"
+                  className="btn-primary btn-auth-submit"
+                  disabled={authLoading}
+                >
+                  {authLoading ? (
+                    <span className="spinner-inline">Processing...</span>
+                  ) : authMode === 'login' ? (
+                    'Log In'
+                  ) : (
+                    'Sign Up'
+                  )}
+                </button>
+              </form>
+
+              <div className="auth-footer">
+                {authMode === 'login' ? (
+                  <p>
+                    Don&apos;t have an account?{' '}
+                    <button
+                      type="button"
+                      id="btn-auth-toggle"
+                      className="btn-link"
+                      onClick={() => {
+                        setAuthMode('signup')
+                        setAuthError(null)
+                      }}
+                    >
+                      Sign up
+                    </button>
+                  </p>
+                ) : (
+                  <p>
+                    Already have an account?{' '}
+                    <button
+                      type="button"
+                      id="btn-auth-toggle"
+                      className="btn-link"
+                      onClick={() => {
+                        setAuthMode('login')
+                        setAuthError(null)
+                      }}
+                    >
+                      Log in
+                    </button>
+                  </p>
+                )}
+              </div>
+            </div>
+          </section>
+        ) : (
+          <>
+            {/* VIEW 1: Roadmap History View */}
         {view === 'history' && (
           <section className="history-section">
             <div className="history-header">
@@ -1801,6 +2059,8 @@ function App() {
                 </div>
               </section>
             )}
+          </>
+        )}
           </>
         )}
       </main>
