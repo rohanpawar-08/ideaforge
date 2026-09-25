@@ -205,6 +205,13 @@ Handles both Stage 1 (clarifying questions) and Stage 2 (roadmap generation). Re
   "data": {
     "id": 42,
     "feasibility": "intermediate",
+    "difficulty_breakdown": {
+      "frontend_complexity": "intermediate",
+      "backend_complexity": "intermediate",
+      "database_complexity": "beginner",
+      "ai_complexity": "intermediate",
+      "deployment_complexity": "intermediate"
+    },
     "estimated_weeks": 4,
     "recommended_stack": ["FastAPI", "React", "Tailwind CSS", "PostgreSQL", "Google Gemini Vision API"],
     "setup_guide": {

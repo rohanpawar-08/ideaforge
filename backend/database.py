@@ -5,15 +5,19 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 
-if not DATABASE_URL:
-    raise RuntimeError(
-        "DATABASE_URL not set. Copy .env.example to .env and add your "
-        "free Postgres connection string from neon.tech or supabase.com"
-    )
+if not DATABASE_URL or not (
+    DATABASE_URL.startswith("postgresql://")
+    or DATABASE_URL.startswith("postgres://")
+    or DATABASE_URL.startswith("sqlite://")
+):
+    DATABASE_URL = "sqlite:///./ideaforge.db"
 
-engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=300)
+if DATABASE_URL.startswith("sqlite"):
+    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+else:
+    engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=300)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 

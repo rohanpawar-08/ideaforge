@@ -17,6 +17,13 @@ def test_schema_validator():
         "type": "roadmap",
         "data": {
             "feasibility": "beginner",
+            "difficulty_breakdown": {
+                "frontend_complexity": "beginner",
+                "backend_complexity": "beginner",
+                "database_complexity": "not_applicable",
+                "ai_complexity": "not_applicable",
+                "deployment_complexity": "beginner"
+            },
             "estimated_weeks": 4,
             "recommended_stack": ["HTML/CSS", "JavaScript", "Vite"],
             "setup_guide": {
@@ -44,6 +51,20 @@ def test_schema_validator():
     assert errors == [], f"Expected 0 errors for valid roadmap, got: {errors}"
     print("✔ Valid roadmap passed validation.")
     
+    # Missing difficulty_breakdown
+    invalid_no_diff = json.loads(json.dumps(valid_obj))
+    del invalid_no_diff["data"]["difficulty_breakdown"]
+    errors_no_diff = main.validate_roadmap_schema(invalid_no_diff)
+    assert any("difficulty_breakdown" in e for e in errors_no_diff), f"Expected error for missing difficulty_breakdown, got: {errors_no_diff}"
+    print(f"✔ Missing difficulty_breakdown correctly rejected: {errors_no_diff}")
+
+    # Invalid rating in difficulty_breakdown
+    invalid_rating = json.loads(json.dumps(valid_obj))
+    invalid_rating["data"]["difficulty_breakdown"]["frontend_complexity"] = "expert"
+    errors_rating = main.validate_roadmap_schema(invalid_rating)
+    assert any("frontend_complexity" in e for e in errors_rating), f"Expected error for invalid rating, got: {errors_rating}"
+    print(f"✔ Invalid difficulty_breakdown rating correctly rejected: {errors_rating}")
+
     # Missing setup_guide
     invalid_no_setup = json.loads(json.dumps(valid_obj))
     del invalid_no_setup["data"]["setup_guide"]

@@ -603,6 +603,99 @@ input[type='text']:focus {
   border: 1px solid var(--color-purple-border);
 }
 
+/* Feasibility & Difficulty Breakdown */
+.feasibility-summary-card {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+@media (min-width: 820px) {
+  .feasibility-summary-card.has-breakdown {
+    grid-column: span 2;
+  }
+}
+
+.feasibility-main-col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 105px;
+}
+
+.difficulty-breakdown-col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-width: 260px;
+}
+
+.difficulty-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(95px, 1fr));
+  gap: 8px;
+}
+
+.difficulty-badge-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border);
+  padding: 6px 9px;
+  border-radius: var(--radius-sm);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.difficulty-badge-item:hover {
+  border-color: var(--color-border-hover);
+}
+
+.difficulty-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-dim);
+}
+
+.badge-difficulty {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 9999px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  align-self: flex-start;
+}
+
+.difficulty-beginner {
+  background: var(--color-green-bg);
+  color: var(--color-green-text);
+  border: 1px solid var(--color-green-border);
+}
+
+.difficulty-intermediate {
+  background: var(--color-blue-bg);
+  color: var(--color-blue-text);
+  border: 1px solid var(--color-blue-border);
+}
+
+.difficulty-advanced {
+  background: var(--color-purple-bg);
+  color: var(--color-purple-text);
+  border: 1px solid var(--color-purple-border);
+}
+
+.difficulty-not-applicable,
+.difficulty-not_applicable {
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+}
+
 /* Tech Stack Chips */
 .tech-stack-chips {
   display: flex;

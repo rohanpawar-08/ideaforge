@@ -38,6 +38,7 @@ Many developers and students encounter the same bottleneck: they have exciting p
 
 ### 🗺️ Comprehensive Roadmap & Developer Setup Guide
 - **Feasibility & Timeline:** Evaluates complexity (`Beginner`, `Intermediate`, `Advanced`) and projects realistic completion in weeks.
+- **Granular Difficulty Breakdown:** In addition to overall feasibility, rates 5 specific complexity dimensions—Frontend, Backend, Database, AI (or N/A), and Deployment—displayed as responsive difficulty badges.
 - **Developer Setup Guide:** Provides the primary language choice with clear rationale, editor recommendations, companion tools/packages with specific purposes, and the initial terminal command to kick off the project with a 1-click clipboard copy button.
 - **Scope Segmentation:** Separates critical MVP features from optional stretch goals to protect against scope creep.
 - **Milestone Breakdown:** Delivers week-by-week execution goals paired with granular, actionable task checklists.

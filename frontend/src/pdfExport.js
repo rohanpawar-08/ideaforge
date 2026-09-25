@@ -109,9 +109,37 @@ export function buildRoadmapPdf(roadmap, fallbackIdea = '') {
   const splitStack = doc.splitTextToSize(stackStr, contentWidth - 305)
   doc.text(splitStack, col3, boxTop + 37)
 
-  y = boxTop + 70
+  y = boxTop + 66
 
-  // --- 3. Developer Setup Guide ---
+  // Difficulty Breakdown line if present
+  if (roadmap?.difficulty_breakdown) {
+    checkPageBreak(30)
+    const diff = roadmap.difficulty_breakdown
+    const formatDiffVal = (v) => {
+      if (!v) return 'N/A'
+      const s = String(v).toLowerCase().replace('-', '_')
+      if (s === 'not_applicable' || s === 'na') return 'N/A'
+      return s.charAt(0).toUpperCase() + s.slice(1)
+    }
+    const diffParts = [
+      `Frontend: ${formatDiffVal(diff.frontend_complexity)}`,
+      `Backend: ${formatDiffVal(diff.backend_complexity)}`,
+      `Database: ${formatDiffVal(diff.database_complexity)}`,
+      `AI: ${formatDiffVal(diff.ai_complexity)}`,
+      `Deployment: ${formatDiffVal(diff.deployment_complexity)}`,
+    ]
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(8)
+    doc.setTextColor(100, 116, 139)
+    doc.text('DIFFICULTY BREAKDOWN: ', margin, y)
+    const labelW = doc.getTextWidth('DIFFICULTY BREAKDOWN: ')
+    doc.setFont('helvetica', 'normal')
+    doc.setTextColor(51, 65, 85)
+    doc.text(diffParts.join('   |   '), margin + labelW, y)
+    y += 20
+  } else {
+    y = boxTop + 70
+  }
   if (roadmap?.setup_guide) {
     checkPageBreak(85)
     doc.setFont('helvetica', 'bold')

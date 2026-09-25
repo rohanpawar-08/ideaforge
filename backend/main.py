@@ -148,7 +148,9 @@ SYSTEM_PROMPT = (
     "Respond ONLY in this JSON format, nothing else:\n"
     '{"type": "question", "text": "<your plain-language explanation (if needed) and clarifying question>"}\n'
     "or\n"
-    '{"type": "roadmap", "data": {"feasibility": "beginner|intermediate|advanced", "estimated_weeks": <number>, '
+    '{"type": "roadmap", "data": {"feasibility": "beginner|intermediate|advanced", '
+    '"difficulty_breakdown": {"frontend_complexity": "beginner|intermediate|advanced|not_applicable", "backend_complexity": "beginner|intermediate|advanced|not_applicable", "database_complexity": "beginner|intermediate|advanced|not_applicable", "ai_complexity": "beginner|intermediate|advanced|not_applicable", "deployment_complexity": "beginner|intermediate|advanced|not_applicable"}, '
+    '"estimated_weeks": <number>, '
     '"recommended_stack": ["<tech>"], '
     '"setup_guide": {"primary_language": "<string>", "editor_recommendation": "<string>", "key_tools": [{"name": "<string>", "purpose": "<string>"}], "getting_started_command": "<string>"}, '
     '"mvp_features": ["<feature>"], "stretch_features": ["<feature>"], '
@@ -160,16 +162,28 @@ STAGE1_SYSTEM_PROMPT = SYSTEM_PROMPT
 ROADMAP_SYSTEM_PROMPT = (
     "You are a technical project planning assistant. Based on the user's project idea and previous clarifying answers, "
     "generate a comprehensive and realistic project roadmap.\n\n"
-    "CRITICAL REQUIREMENT — Skill Level Consistency:\n"
+    "CRITICAL REQUIREMENTS:\n"
+    "1. Skill Level Consistency:\n"
     "Review the user's stated technical skill level from their previous answers. "
     "Keep the 'setup_guide' (primary language reason, editor recommendation, key tools, and getting started command) "
     "strictly consistent with the user's stated skill level — recommend accessible, beginner-friendly tools/editors (like VS Code or beginner-friendly CLIs) "
     "for beginners, and appropriately advanced tools for more experienced developers.\n\n"
+    "2. Difficulty Breakdown:\n"
+    "In addition to the overall 'feasibility' level (beginner, intermediate, or advanced), provide a granular 'difficulty_breakdown' object "
+    "evaluating: frontend_complexity, backend_complexity, database_complexity, ai_complexity (use 'not_applicable' if the project has no AI component), "
+    "and deployment_complexity. Each must be rated strictly one of: 'beginner', 'intermediate', 'advanced', or 'not_applicable'.\n\n"
     "Respond ONLY in this exact JSON schema, with no additional commentary or markdown wrapping:\n"
     "{\n"
     '  "type": "roadmap",\n'
     '  "data": {\n'
     '    "feasibility": "beginner|intermediate|advanced",\n'
+    '    "difficulty_breakdown": {\n'
+    '      "frontend_complexity": "beginner|intermediate|advanced|not_applicable",\n'
+    '      "backend_complexity": "beginner|intermediate|advanced|not_applicable",\n'
+    '      "database_complexity": "beginner|intermediate|advanced|not_applicable",\n'
+    '      "ai_complexity": "beginner|intermediate|advanced|not_applicable",\n'
+    '      "deployment_complexity": "beginner|intermediate|advanced|not_applicable"\n'
+    '    },\n'
     '    "estimated_weeks": <number>,\n'
     '    "recommended_stack": ["<tech1>", "<tech2>"],\n'
     '    "setup_guide": {\n'
@@ -221,6 +235,37 @@ def validate_roadmap_schema(obj: dict) -> list[str]:
         )
     else:
         data["feasibility"] = feasibility.lower()
+
+    # Difficulty breakdown validation
+    difficulty_breakdown = data.get("difficulty_breakdown")
+    valid_ratings = {"beginner", "intermediate", "advanced", "not_applicable"}
+    required_breakdown_fields = [
+        "frontend_complexity",
+        "backend_complexity",
+        "database_complexity",
+        "ai_complexity",
+        "deployment_complexity",
+    ]
+
+    if not isinstance(difficulty_breakdown, dict):
+        errors.append("'data.difficulty_breakdown' must be an object.")
+    else:
+        for field in required_breakdown_fields:
+            val = difficulty_breakdown.get(field)
+            if isinstance(val, str):
+                normalized = val.strip().lower().replace("-", "_").replace(" ", "_")
+                if normalized in ("na", "n_a"):
+                    normalized = "not_applicable"
+                if normalized in valid_ratings:
+                    difficulty_breakdown[field] = normalized
+                else:
+                    errors.append(
+                        f"'data.difficulty_breakdown.{field}' must be one of: 'beginner', 'intermediate', 'advanced', 'not_applicable'."
+                    )
+            else:
+                errors.append(
+                    f"'data.difficulty_breakdown.{field}' must be one of: 'beginner', 'intermediate', 'advanced', 'not_applicable'."
+                )
 
     estimated_weeks = data.get("estimated_weeks")
     if not isinstance(estimated_weeks, (int, float)) or isinstance(
@@ -358,6 +403,13 @@ def generate_roadmap_with_validation(messages: list[dict]) -> dict:
                 '  "type": "roadmap",\n'
                 '  "data": {\n'
                 '    "feasibility": "beginner|intermediate|advanced",\n'
+                '    "difficulty_breakdown": {\n'
+                '      "frontend_complexity": "beginner|intermediate|advanced|not_applicable",\n'
+                '      "backend_complexity": "beginner|intermediate|advanced|not_applicable",\n'
+                '      "database_complexity": "beginner|intermediate|advanced|not_applicable",\n'
+                '      "ai_complexity": "beginner|intermediate|advanced|not_applicable",\n'
+                '      "deployment_complexity": "beginner|intermediate|advanced|not_applicable"\n'
+                '    },\n'
                 '    "estimated_weeks": <number>,\n'
                 '    "recommended_stack": ["<tech1>", "<tech2>"],\n'
                 '    "setup_guide": {\n'
@@ -475,6 +527,7 @@ def get_roadmaps(
                 "summary": {
                     "feasibility": feasibility,
                     "estimated_weeks": estimated_weeks,
+                    "difficulty_breakdown": inner_data.get("difficulty_breakdown"),
                 },
                 "created_at": r.created_at.isoformat() if r.created_at else None,
             })
@@ -986,8 +1039,9 @@ def generate_plan(
             ]
             roadmap_response = generate_roadmap_with_validation(messages)
             try:
+                user_id_val = current_user.id if isinstance(current_user, models.User) else getattr(current_user, "id", None)
                 roadmap_record = models.Roadmap(
-                    user_id=current_user.id,
+                    user_id=user_id_val,
                     original_idea=request.idea,
                     data=roadmap_response.get("data", roadmap_response),
                 )
@@ -1012,8 +1066,9 @@ def generate_plan(
                 if errors:
                     response = generate_roadmap_with_validation(messages)
                 try:
+                    user_id_val = current_user.id if isinstance(current_user, models.User) else getattr(current_user, "id", None)
                     roadmap_record = models.Roadmap(
-                        user_id=current_user.id,
+                        user_id=user_id_val,
                         original_idea=request.idea,
                         data=response.get("data", response),
                     )

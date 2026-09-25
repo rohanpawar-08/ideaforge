@@ -4,6 +4,21 @@ import './App.css'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
+const DIFFICULTY_CATEGORIES = [
+  { key: 'frontend_complexity', label: 'Frontend' },
+  { key: 'backend_complexity', label: 'Backend' },
+  { key: 'database_complexity', label: 'Database' },
+  { key: 'ai_complexity', label: 'AI' },
+  { key: 'deployment_complexity', label: 'Deployment' },
+]
+
+function formatDifficultyLabel(val) {
+  if (!val) return 'N/A'
+  const normalized = String(val).toLowerCase().replace('-', '_')
+  if (normalized === 'not_applicable' || normalized === 'na') return 'N/A'
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1)
+}
+
 function App() {
   // Authentication states
   const [token, setToken] = useState(() => {
@@ -1197,17 +1212,56 @@ function App() {
 
               {/* Top Meta Summary: Feasibility, Weeks, Tech Stack */}
               <div className="roadmap-summary-cards">
-                <div className="summary-card">
-                  <span className="card-label">Feasibility</span>
-                  <span
-                    className={`badge badge-feasibility feasibility-${(
-                      roadmap.feasibility || 'intermediate'
-                    ).toLowerCase()}`}
-                  >
-                    {roadmap.feasibility
-                      ? roadmap.feasibility.toUpperCase()
-                      : 'INTERMEDIATE'}
-                  </span>
+                <div
+                  className={`summary-card feasibility-summary-card ${
+                    roadmap.difficulty_breakdown ? 'has-breakdown' : ''
+                  }`}
+                >
+                  <div className="feasibility-main-col">
+                    <span className="card-label">Feasibility</span>
+                    <span
+                      className={`badge badge-feasibility feasibility-${(
+                        roadmap.feasibility || 'intermediate'
+                      ).toLowerCase()}`}
+                    >
+                      {roadmap.feasibility
+                        ? roadmap.feasibility.toUpperCase()
+                        : 'INTERMEDIATE'}
+                    </span>
+                  </div>
+
+                  {roadmap.difficulty_breakdown && (
+                    <div className="difficulty-breakdown-col">
+                      <span className="card-label">Difficulty Breakdown</span>
+                      <div className="difficulty-grid">
+                        {DIFFICULTY_CATEGORIES.map((cat) => {
+                          const rawVal =
+                            roadmap.difficulty_breakdown[cat.key] || 'not_applicable'
+                          const cleanVal = String(rawVal)
+                            .toLowerCase()
+                            .replace('-', '_')
+                          const badgeClass =
+                            cleanVal === 'not_applicable' || cleanVal === 'na'
+                              ? 'not-applicable'
+                              : cleanVal
+                          return (
+                            <div
+                              key={cat.key}
+                              className="difficulty-badge-item"
+                              title={`${cat.label} Complexity: ${formatDifficultyLabel(rawVal)}`}
+                            >
+                              <span className="difficulty-label">{cat.label}</span>
+                              <span
+                                className={`badge badge-difficulty difficulty-${badgeClass}`}
+                              >
+                                {formatDifficultyLabel(rawVal)}
+                              </span>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="summary-card">
