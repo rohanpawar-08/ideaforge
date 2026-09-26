@@ -850,7 +850,6 @@ function App() {
         <div
           className="header-brand"
           onClick={handleReset}
-          style={{ cursor: 'pointer' }}
           title="Back to Generator"
         >
           <div className="brand-badge">⚡ IdeaForge</div>
@@ -1198,7 +1197,7 @@ function App() {
             )}
 
             {regenerateError && (
-              <div className="error-banner" style={{ marginBottom: '1.25rem' }}>
+              <div className="error-banner">
                 <div className="error-text">⚠️ {regenerateError}</div>
                 <button
                   className="btn-retry"
@@ -1775,7 +1774,7 @@ function App() {
                 )}
 
                 {roadmapChatError && (
-                  <div className="error-banner" style={{ margin: '12px 0 0 0' }}>
+                  <div className="error-banner">
                     <div className="error-text">⚠️ {roadmapChatError}</div>
                     <button
                       className="btn-retry"
