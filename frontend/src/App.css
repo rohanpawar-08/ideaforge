@@ -93,6 +93,8 @@
   --color-warning-bg: #fffbeb;
   --color-warning-text: #b45309;
   --color-warning-border: #fde68a;
+
+  --skeleton-highlight: rgba(255, 255, 255, 0.6);
 }
 
 /* Explicit Dark Theme */
@@ -149,6 +151,8 @@
   --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.35);
   --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.45), 0 2px 4px -2px rgba(0, 0, 0, 0.35);
   --shadow-hover: 0 8px 18px -2px rgba(0, 0, 0, 0.55), 0 3px 6px -1px rgba(0, 0, 0, 0.45);
+
+  --skeleton-highlight: rgba(255, 255, 255, 0.07);
 }
 
 /* System Default Fallback (prefers-color-scheme: dark) if not explicitly set to light */
@@ -253,6 +257,7 @@ body {
 .brand-badge {
   display: inline-flex;
   align-items: center;
+  gap: 6px;
   font-size: var(--text-xs);
   font-weight: var(--font-weight-bold);
   text-transform: uppercase;
@@ -334,6 +339,19 @@ body {
 }
 
 /* ==========================================================================
+   Icon System (inline SVG, stroke-based, inherits currentColor)
+   ========================================================================== */
+.icon {
+  display: inline-block;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+button .icon {
+  margin-top: -1px;
+}
+
+/* ==========================================================================
    Unified Button System
    ========================================================================== */
 button {
@@ -356,6 +374,10 @@ button {
 button:focus-visible {
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;
+}
+
+button:active:not(:disabled) {
+  transform: scale(0.98);
 }
 
 /* Primary Button */
@@ -700,30 +722,48 @@ input[type='password']:focus {
 
 .auth-card {
   width: 100%;
-  max-width: 440px;
+  max-width: 460px;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   padding: var(--space-7) var(--space-6);
   box-shadow: var(--shadow-md);
+  text-align: center;
+}
+
+.auth-brand-row {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: var(--font-weight-bold);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-primary);
+  background: var(--color-primary-light);
+  border: 1px solid var(--color-blue-border);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-full);
+  margin-bottom: var(--space-5);
 }
 
 .auth-header {
   text-align: center;
-  margin-bottom: var(--space-6);
+  margin-bottom: var(--space-5);
 }
 
 .auth-icon-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 48px;
-  height: 48px;
-  border-radius: var(--radius-md);
+  width: 52px;
+  height: 52px;
+  border-radius: var(--radius-lg);
   background: var(--color-primary-light);
-  font-size: 22px;
+  color: var(--color-primary);
   margin-bottom: var(--space-4);
   border: 1px solid var(--color-blue-border);
+  box-shadow: var(--shadow-sm);
 }
 
 .auth-header h2 {
@@ -741,9 +781,38 @@ input[type='password']:focus {
   margin: 0;
 }
 
+.auth-tagline {
+  max-width: 340px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.auth-description {
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  line-height: 1.55;
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  margin-top: var(--space-3);
+  max-width: 380px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.auth-footnote {
+  margin-top: var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  text-align: center;
+  line-height: 1.4;
+}
+
 .auth-error-banner {
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: var(--space-2);
   background: var(--color-danger-bg);
   color: var(--color-danger-text);
@@ -754,6 +823,8 @@ input[type='password']:focus {
   font-weight: var(--font-weight-medium);
   margin-bottom: var(--space-4);
   line-height: 1.4;
+  text-align: left;
+  animation: viewFade 0.2s ease;
 }
 
 .auth-form {
@@ -799,6 +870,14 @@ input[type='password']:focus {
   padding: 11px;
   font-size: var(--text-base);
   font-weight: var(--font-weight-semibold);
+}
+
+.btn-auth-submit:not(:disabled):hover {
+  box-shadow: var(--shadow-md);
+}
+
+.btn-auth-submit:not(:disabled):active {
+  transform: scale(0.99);
 }
 
 .auth-footer {
@@ -1252,6 +1331,12 @@ input[type='password']:focus {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.summary-card:hover {
+  border-color: var(--color-border-hover);
+  box-shadow: var(--shadow-sm);
 }
 
 .summary-card.stack-card {
@@ -1624,6 +1709,12 @@ input[type='password']:focus {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.setup-card:hover {
+  border-color: var(--color-border-hover);
+  box-shadow: var(--shadow-sm);
 }
 
 .setup-card-label {
@@ -2274,17 +2365,162 @@ input[type='password']:focus {
   color: var(--color-text-muted);
 }
 
+/* Skeleton Loading States (shimmer) */
 .history-loading {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--space-4);
+}
+
+.skeleton-history-card {
+  height: 156px;
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-subtle);
+}
+
+.skeleton-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.skeleton-shimmer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--skeleton-highlight),
+    transparent
+  );
+  animation: shimmer 1.6s infinite;
+}
+
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.skeleton-bar {
+  height: 22px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-subtle);
+}
+
+.skeleton-box {
+  height: 110px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-subtle);
+  flex: 1;
+}
+
+.skeleton-block {
+  height: 64px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-subtle);
+}
+
+.roadmap-loading-skeleton,
+.compare-loading-skeleton {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-3);
-  padding: var(--space-8) var(--space-4);
-  color: var(--color-text-muted);
-  font-size: var(--text-base);
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-6);
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.roadmap-loading-skeleton .skeleton-row {
+  display: flex;
+  gap: var(--space-4);
+  align-items: center;
+}
+
+.roadmap-loading-skeleton .skeleton-cards-row,
+.compare-loading-skeleton .skeleton-cards-row,
+.roadmap-generating-skeleton .skeleton-cards-row {
+  display: flex;
+  gap: var(--space-4);
+}
+
+.roadmap-generating-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  width: 100%;
+  max-width: 580px;
+  animation: fadeIn 0.3s ease-out;
+}
+
+.roadmap-generating-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.roadmap-generating-header .generating-spinner {
+  width: 18px;
+  height: 18px;
+  border-width: 2.5px;
+  color: var(--color-primary);
+  flex-shrink: 0;
+}
+
+.generating-text-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.generating-title {
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-main);
+}
+
+.generating-subtitle {
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+}
+
+.roadmap-generating-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.roadmap-generating-skeleton .skeleton-row {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+@media (max-width: 640px) {
+  .roadmap-loading-skeleton .skeleton-cards-row,
+  .compare-loading-skeleton .skeleton-cards-row,
+  .roadmap-generating-skeleton .skeleton-cards-row {
+    flex-direction: column;
+  }
+
+  .roadmap-loading-skeleton,
+  .compare-loading-skeleton,
+  .roadmap-generating-card {
+    padding: var(--space-4);
+  }
 }
 
 .history-empty-state {
@@ -2349,6 +2585,10 @@ input[type='password']:focus {
   box-shadow: 0 0 0 3px var(--color-primary-light);
 }
 
+.history-card:active {
+  transform: translateY(0) scale(0.99);
+}
+
 .history-card-top {
   display: flex;
   justify-content: space-between;
@@ -2387,7 +2627,16 @@ input[type='password']:focus {
 .history-card-weeks {
   font-weight: var(--font-weight-medium);
   color: var(--color-text-muted);
-  display: flex;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.comp-metric-val {
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text-main);
+  display: inline-flex;
   align-items: center;
   gap: 4px;
 }
@@ -2453,6 +2702,10 @@ input[type='password']:focus {
   box-shadow: var(--shadow-hover);
 }
 
+.comparison-card:active {
+  transform: translateY(0) scale(0.99);
+}
+
 .comp-card-top {
   display: flex;
   justify-content: space-between;
@@ -2482,12 +2735,6 @@ input[type='password']:focus {
   font-weight: var(--font-weight-semibold);
   text-transform: uppercase;
   color: var(--color-text-dim);
-}
-
-.comp-metric-val {
-  font-size: var(--text-sm);
-  font-weight: var(--font-weight-bold);
-  color: var(--color-text-main);
 }
 
 .comp-factors {
@@ -2626,5 +2873,430 @@ input[type='password']:focus {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+/* Subtle transition when switching views (keyed by view name in App.jsx) */
+.view-fade {
+  animation: viewFade 0.25s ease;
+}
+
+@keyframes viewFade {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ==========================================================================
+   Icon Badge Containers (uniform iconography across sections)
+   ========================================================================== */
+.progress-badge-icon,
+.feature-icon,
+.setup-icon,
+.schema-icon,
+.schema-table-icon,
+.chat-section-icon,
+.rec-icon,
+.factor-icon,
+.empty-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.progress-badge-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: var(--radius-md);
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+  border: 1px solid var(--color-blue-border);
+}
+
+.feature-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-sm);
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+  border: 1px solid var(--color-blue-border);
+}
+
+.stretch-box .feature-icon {
+  background: var(--color-purple-bg);
+  color: var(--color-purple-text);
+  border-color: var(--color-purple-border);
+}
+
+.setup-icon,
+.schema-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+  border: 1px solid var(--color-blue-border);
+}
+
+.schema-table-icon {
+  color: var(--color-primary);
+}
+
+.chat-section-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-md);
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+  border: 1px solid var(--color-blue-border);
+}
+
+.rec-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: var(--radius-md);
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+  border: 1px solid var(--color-blue-border);
+}
+
+.factor-icon {
+  color: inherit;
+}
+
+.factor-icon .icon {
+  display: block;
+}
+
+.empty-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-full);
+  background: var(--color-surface-subtle);
+  color: var(--color-text-dim);
+  border: 1px solid var(--color-border);
+}
+
+/* ==========================================================================
+   Animated Task Checkbox (progress tracking)
+   ========================================================================== */
+.task-item {
+  position: relative;
+}
+
+.task-checkbox-input {
+  position: absolute;
+  opacity: 0;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  cursor: pointer;
+}
+
+.task-checkbox {
+  width: 17px;
+  height: 17px;
+  border-radius: 5px;
+  border: 1.5px solid var(--color-border-hover);
+  background: var(--color-surface);
+  color: transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+  cursor: pointer;
+  transition: background-color 0.18s ease, border-color 0.18s ease,
+    transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.task-checkbox .icon {
+  stroke-width: 3;
+  transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transform: scale(0.4);
+  opacity: 0;
+}
+
+.task-checkbox-input:hover + .task-checkbox,
+.task-item:hover .task-checkbox {
+  border-color: var(--color-primary);
+}
+
+.task-checkbox-input:focus-visible + .task-checkbox {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.task-item.task-checked .task-checkbox {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: #ffffff;
+  animation: checkboxPop 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.task-item.task-checked .task-checkbox .icon {
+  transform: scale(1);
+  opacity: 1;
+}
+
+@keyframes checkboxPop {
+  0% {
+    transform: scale(0.85);
+  }
+  60% {
+    transform: scale(1.12);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.task-item.task-checked .task-text {
+  text-decoration: line-through;
+  color: var(--color-text-dim);
+  transition: all 0.2s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .view-fade,
+  .auth-card-container,
+  .skeleton-shimmer::after,
+  .task-checkbox,
+  .task-checkbox .icon {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* ==========================================================================
+   Responsive: Tablet & below (≤ 640px)
+   ========================================================================== */
+@media (max-width: 640px) {
+  .app-container {
+    padding: var(--space-5) var(--space-4) var(--space-8);
+  }
+
+  .app-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-3);
+  }
+
+  .header-actions {
+    width: 100%;
+  }
+
+  .header-actions .btn-secondary,
+  .header-actions .btn-theme-toggle {
+    flex: 1 1 auto;
+  }
+
+  .user-badge {
+    max-width: 100%;
+  }
+
+  .saved-roadmap-toolbar,
+  .setup-guide-header,
+  .schema-header,
+  .timeline-header-row,
+  .roadmap-chat-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .setup-header-actions,
+  .schema-header-actions,
+  .toolbar-right-actions {
+    flex-wrap: wrap;
+  }
+
+  .roadmap-title-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .roadmap-header-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .roadmap-header-actions .btn-secondary:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .progress-card-header {
+    flex-wrap: wrap;
+  }
+
+  .history-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .history-header .btn-primary {
+    align-self: flex-start;
+  }
+
+  .compare-results-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .compare-results-header .btn-secondary {
+    align-self: flex-start;
+  }
+
+  .chat-tips {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-2);
+  }
+
+  .proposed-change-top .btn-apply-change {
+    width: 100%;
+  }
+
+  .code-block {
+    flex-wrap: wrap;
+  }
+
+  .code-content {
+    min-width: 0;
+  }
+
+  .code-content code {
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .error-banner {
+    flex-wrap: wrap;
+  }
+
+  .compare-results-footer-actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .compare-results-footer-actions .btn-secondary {
+    width: 100%;
+  }
+
+  .form-actions .btn-primary {
+    width: 100%;
+  }
+}
+
+/* ==========================================================================
+   Responsive: Small phones (≤ 400px, e.g. 375px iPhone viewport)
+   ========================================================================== */
+@media (max-width: 400px) {
+  .app-container {
+    padding: var(--space-4) var(--space-3) var(--space-7);
+  }
+
+  .header-brand h1 {
+    font-size: var(--text-xl);
+  }
+
+  .header-actions .btn-secondary {
+    padding: var(--space-1) var(--space-2);
+    font-size: var(--text-xs);
+  }
+
+  .user-badge {
+    flex: 1 1 100%;
+    order: -1;
+  }
+
+  .auth-card {
+    padding: var(--space-6) var(--space-4);
+  }
+
+  .auth-description {
+    text-align: left;
+  }
+
+  .initial-card,
+  .chat-section,
+  .roadmap-header,
+  .roadmap-progress-card,
+  .setup-guide-container,
+  .suggested-schema-container,
+  .timeline-container,
+  .roadmap-chat-container {
+    padding: var(--space-4);
+  }
+
+  .roadmap-header-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .summary-metric {
+    font-size: var(--text-lg);
+  }
+
+  .timeline {
+    padding-left: var(--space-6);
+  }
+
+  .timeline-marker {
+    left: -28px;
+    width: 22px;
+    height: 22px;
+  }
+
+  .history-empty-state {
+    padding: var(--space-7) var(--space-4);
+  }
+
+  .chat-input-bar,
+  .roadmap-chat-input-bar {
+    flex-direction: column;
+  }
+
+  .chat-input-bar .btn-primary,
+  .roadmap-chat-input-bar .btn-primary {
+    width: 100%;
+  }
+
+  .generator-mode-tabs {
+    max-width: 100%;
+  }
+
+  .mode-tab-btn {
+    font-size: var(--text-xs);
+    padding: 7px var(--space-2);
+  }
+
+  .btn-regenerate-section {
+    align-self: flex-start;
+  }
+
+  .roadmap-chat-title-group {
+    align-items: flex-start;
+  }
+
+  .comp-metric-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+}
+
+/* ==========================================================================
+   Responsive: Landscape phones / very short viewports
+   ========================================================================== */
+@media (max-height: 480px) and (orientation: landscape) {
+  .chat-messages,
+  .roadmap-chat-box {
+    max-height: 240px;
   }
 }

@@ -20,6 +20,63 @@ function formatDifficultyLabel(val) {
   return normalized.charAt(0).toUpperCase() + normalized.slice(1)
 }
 
+// Lightweight inline SVG icon system (stroke-based, inherits currentColor)
+// Used uniformly across the app so no section relies on emoji-as-icon.
+function Icon({ name, size = 16, className = '' }) {
+  const iconPaths = {
+    zap: 'M13 2L3 14h9l-1 8 10-12h-9l1-8z',
+    bulb: 'M9 18h6M10 22h4M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 0 1 8.91 14',
+    sparkles:
+      'M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3zM19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15zM5 16l.7 1.8 1.8.7-1.8.7L5 21l-.7-1.8-1.8-.7 1.8-.7L5 16z',
+    lock: 'M5 11h14v10H5zM8 11V7a4 4 0 0 1 8 0v4',
+    user: 'M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8',
+    logout: 'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9',
+    book: 'M4 19.5A2.5 2.5 0 0 1 6.5 17H20M4 19.5A2.5 2.5 0 0 0 6.5 22H20V2H6.5A2.5 2.5 0 0 0 4 4.5z',
+    refresh: 'M21 12a9 9 0 1 1-2.64-6.36L21 8M21 3v5h-5',
+    sun: 'M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42',
+    moon: 'M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z',
+    folder: 'M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z',
+    clock: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20M12 6v6l4 2',
+    target:
+      'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20M12 18a6 6 0 1 0 0-12 6 6 0 0 0 0 12M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4',
+    rocket:
+      'M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09zM12 15l-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2zM9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5',
+    file: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M16 13H8M16 17H8M10 9H8',
+    download: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3',
+    database:
+      'M12 8c4.97 0 9-1.34 9-3s-4.03-3-9-3-9 1.34-9 3 4.03 3 9 3M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3',
+    table: 'M3 5h18v14H3zM3 10h18M9 5v14',
+    message:
+      'M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8z',
+    help: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3M12 17h.01',
+    scale: 'M12 3v18M8 21h8M3 7h18M6 7l-2.5 5.5a3 3 0 0 0 5 0L6 7M18 7l-2.5 5.5a3 3 0 0 0 5 0L18 7',
+    cap: 'M22 10L12 5 2 10l10 5 10-5zM6 12v5c0 1.7 2.7 3 6 3s6-1.3 6-3v-5',
+    card: 'M2 5h20v14H2zM2 10h20',
+    copy: 'M9 9h13v13H9zM5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1',
+    check: 'M20 6L9 17l-5-5',
+    warning:
+      'M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01',
+  }
+  const pathData = iconPaths[name] || iconPaths.sparkles
+  return (
+    <svg
+      className={`icon ${className}`.trim()}
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d={pathData} />
+    </svg>
+  )
+}
+
 function App() {
   // Authentication states
   const [token, setToken] = useState(() => {
@@ -852,14 +909,17 @@ function App() {
           onClick={handleReset}
           title="Back to Generator"
         >
-          <div className="brand-badge">⚡ IdeaForge</div>
+          <div className="brand-badge">
+            <Icon name="zap" size={12} /> IdeaForge
+          </div>
           <h1>Technical Roadmap Generator</h1>
           <p>Turn a rough project idea into an actionable, week-by-week build plan.</p>
         </div>
         <div className="header-actions">
           {token && currentUserEmail && (
             <span className="user-badge" title={`Signed in as ${currentUserEmail}`}>
-              👤 {currentUserEmail}
+              <Icon name="user" size={12} />
+              {currentUserEmail}
             </span>
           )}
           <button
@@ -870,7 +930,7 @@ function App() {
             title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
             aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
           >
-            {theme === 'dark' ? '☀️' : '🌙'}
+            <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={16} />
           </button>
           {token && (
             <>
@@ -879,14 +939,16 @@ function App() {
                 onClick={handleOpenHistory}
                 id="btn-history"
               >
-                📜 History
+                <Icon name="book" size={14} />
+                History
               </button>
               <button
                 className={`btn-secondary btn-sm ${view === 'generator' && !hasStarted ? 'active-nav-tab' : ''}`}
                 onClick={handleReset}
                 id="btn-new-idea"
               >
-                ↺ New Idea
+                <Icon name="refresh" size={14} />
+                New Idea
               </button>
               <button
                 className="btn-secondary btn-sm btn-logout"
@@ -894,7 +956,8 @@ function App() {
                 id="btn-logout"
                 title="Log out of IdeaForge"
               >
-                🚪 Log out
+                <Icon name="logout" size={14} />
+                Log out
               </button>
             </>
           )}
@@ -902,25 +965,35 @@ function App() {
       </header>
 
       {/* Main Content Area */}
-      <main className="main-content">
+      <main className="main-content" key={view}>
         {!token ? (
           <section className="auth-card-container">
             <div className="auth-card">
+              <div className="auth-brand-row">
+                <span className="auth-brand-mark">
+                  <Icon name="sparkles" size={15} />
+                </span>
+                IdeaForge
+              </div>
               <div className="auth-header">
                 <div className="auth-icon-badge">
-                  {authMode === 'login' ? '🔐' : '✨'}
+                  <Icon name={authMode === 'login' ? 'lock' : 'sparkles'} size={22} />
                 </div>
-                <h2>{authMode === 'login' ? 'Welcome Back' : 'Create an Account'}</h2>
-                <p>
+                <h2>{authMode === 'login' ? 'Welcome back' : 'Create your account'}</h2>
+                <p className="auth-tagline">
                   {authMode === 'login'
                     ? 'Sign in to access and manage your personalized project roadmaps.'
                     : 'Join IdeaForge to turn rough project ideas into structured timelines.'}
+                </p>
+                <p className="auth-description">
+                  IdeaForge turns a rough idea into an actionable, week-by-week build plan —
+                  complete with milestones, a recommended tech stack, and a database schema.
                 </p>
               </div>
 
               {authError && (
                 <div className="auth-error-banner" role="alert">
-                  <span className="error-icon">⚠️</span>
+                  <Icon name="warning" size={14} />
                   <span>{authError}</span>
                 </div>
               )}
@@ -967,7 +1040,12 @@ function App() {
                   disabled={authLoading}
                 >
                   {authLoading ? (
-                    <span className="spinner-inline">Processing...</span>
+                    <>
+                      <span className="btn-spinner"></span>
+                      <span>
+                        {authMode === 'login' ? 'Signing in...' : 'Creating account...'}
+                      </span>
+                    </>
                   ) : authMode === 'login' ? (
                     'Log In'
                   ) : (
@@ -1009,13 +1087,17 @@ function App() {
                   </p>
                 )}
               </div>
+
+              <p className="auth-footnote">
+                Free to use · Your roadmaps are saved to your account
+              </p>
             </div>
           </section>
         ) : (
           <>
             {/* VIEW 1: Roadmap History View */}
         {view === 'history' && (
-          <section className="history-section">
+          <section className="history-section view-fade">
             <div className="history-header">
               <div className="history-title-block">
                 <h2>Roadmap History</h2>
@@ -1026,20 +1108,24 @@ function App() {
                 onClick={handleReset}
                 id="btn-history-new-idea"
               >
-                + New Idea
+                <Icon name="zap" size={12} />
+                New Idea
               </button>
             </div>
 
             {isLoadingHistory && (
-              <div className="history-loading">
-                <span className="dot-pulse"></span>
-                <span>Loading saved roadmaps...</span>
+              <div className="history-loading" aria-live="polite" aria-busy="true">
+                <div className="skeleton-history-card skeleton-shimmer"></div>
+                <div className="skeleton-history-card skeleton-shimmer"></div>
+                <div className="skeleton-history-card skeleton-shimmer"></div>
               </div>
             )}
 
             {historyError && (
               <div className="error-banner">
-                <div className="error-text">⚠️ {historyError}</div>
+                <div className="error-text">
+                  <Icon name="warning" size={14} /> {historyError}
+                </div>
                 <button
                   className="btn-retry"
                   type="button"
@@ -1052,7 +1138,9 @@ function App() {
 
             {!isLoadingHistory && !historyError && historyRoadmaps.length === 0 && (
               <div className="history-empty-state">
-                <div className="empty-icon">📂</div>
+                <div className="empty-icon">
+                  <Icon name="folder" size={36} />
+                </div>
                 <h3>No saved roadmaps yet</h3>
                 <p>Generate your first technical roadmap to see it listed here.</p>
                 <button className="btn-primary" onClick={handleReset}>
@@ -1095,7 +1183,8 @@ function App() {
 
                     <div className="history-card-footer">
                       <span className="history-card-weeks">
-                        ⏱️ {item.summary?.estimated_weeks || 4}{' '}
+                        <Icon name="clock" size={12} />
+                        {item.summary?.estimated_weeks || 4}{' '}
                         {item.summary?.estimated_weeks === 1 ? 'Week' : 'Weeks'}
                       </span>
                       <span className="history-card-view-link">
@@ -1109,17 +1198,24 @@ function App() {
           </section>
         )}
 
-        {/* Loading overlay when loading saved roadmap */}
+        {/* Skeleton while loading a saved roadmap */}
         {isLoadingSaved && (
-          <div className="history-loading">
-            <span className="dot-pulse"></span>
-            <span>Loading roadmap details...</span>
+          <div className="roadmap-loading-skeleton" aria-live="polite" aria-busy="true">
+            <div className="skeleton-row">
+              <div className="skeleton-bar skeleton-shimmer" style={{ width: '42%' }}></div>
+              <div className="skeleton-bar skeleton-shimmer" style={{ width: '18%' }}></div>
+            </div>
+            <div className="skeleton-cards-row">
+              <div className="skeleton-box skeleton-shimmer"></div>
+              <div className="skeleton-box skeleton-shimmer"></div>
+            </div>
+            <div className="skeleton-block skeleton-shimmer"></div>
           </div>
         )}
 
         {/* VIEW 2: Roadmap Timeline View (Shared by fresh generation & saved roadmap) */}
         {!isLoadingSaved && isShowingRoadmap && (
-          <section className="roadmap-section">
+          <section className="roadmap-section view-fade">
             {/* Back to History bar when viewing a saved roadmap */}
             {view === 'saved_roadmap' && (
               <div className="saved-roadmap-toolbar">
@@ -1139,7 +1235,8 @@ function App() {
                     id="btn-generate-readme-toolbar"
                     title="Generate and download README.md"
                   >
-                    📄 README
+                    <Icon name="file" size={12} />
+                    README
                   </button>
                   <button
                     type="button"
@@ -1148,7 +1245,8 @@ function App() {
                     id="btn-download-pdf-toolbar"
                     title="Download roadmap as PDF"
                   >
-                    📥 PDF
+                    <Icon name="download" size={12} />
+                    PDF
                   </button>
                   {roadmap.created_at && (
                     <span className="saved-date-tag">
@@ -1164,7 +1262,9 @@ function App() {
               <div className="roadmap-progress-card" id="roadmap-progress-card">
                 <div className="progress-card-header">
                   <div className="progress-info">
-                    <span className="progress-badge-icon">🎯</span>
+                    <span className="progress-badge-icon">
+                      <Icon name="target" size={22} />
+                    </span>
                     <div>
                       <h3 className="progress-main-title">Roadmap Progress</h3>
                       <p className="progress-task-stats" id="progress-task-stats">
@@ -1198,7 +1298,9 @@ function App() {
 
             {regenerateError && (
               <div className="error-banner">
-                <div className="error-text">⚠️ {regenerateError}</div>
+                <div className="error-text">
+                  <Icon name="warning" size={14} /> {regenerateError}
+                </div>
                 <button
                   className="btn-retry"
                   type="button"
@@ -1227,7 +1329,8 @@ function App() {
                     id="btn-generate-readme"
                     title="Generate and download README.md as a formatted file"
                   >
-                    📄 Generate README
+                    <Icon name="file" size={14} />
+                    Generate README
                   </button>
                   <button
                     type="button"
@@ -1236,7 +1339,8 @@ function App() {
                     id="btn-download-pdf"
                     title="Download roadmap as a formatted PDF"
                   >
-                    📥 Download as PDF
+                    <Icon name="download" size={14} />
+                    Download as PDF
                   </button>
                   <button className="btn-secondary btn-sm" onClick={handleReset}>
                     Plan Another Project
@@ -1325,7 +1429,10 @@ function App() {
                           <span>Regenerating...</span>
                         </>
                       ) : (
-                        '↻ Regenerate'
+                        <>
+                          <Icon name="refresh" size={12} />
+                          <span>Regenerate</span>
+                        </>
                       )}
                     </button>
                   </div>
@@ -1344,7 +1451,9 @@ function App() {
                 {roadmap.mvp_features && roadmap.mvp_features.length > 0 && (
                   <div className="feature-box mvp-box">
                     <div className="feature-header">
-                      <span className="feature-icon">🎯</span>
+                      <span className="feature-icon">
+                        <Icon name="target" size={16} />
+                      </span>
                       <strong>Core MVP Scope</strong>
                     </div>
                     <ul>
@@ -1358,7 +1467,9 @@ function App() {
                 {roadmap.stretch_features && roadmap.stretch_features.length > 0 && (
                   <div className="feature-box stretch-box">
                     <div className="feature-header">
-                      <span className="feature-icon">🚀</span>
+                      <span className="feature-icon">
+                        <Icon name="rocket" size={16} />
+                      </span>
                       <strong>Stretch Features</strong>
                     </div>
                     <ul>
@@ -1376,7 +1487,9 @@ function App() {
               <div className="setup-guide-container">
                 <div className="setup-guide-header">
                   <div className="setup-guide-title">
-                    <span className="setup-icon">🚀</span>
+                    <span className="setup-icon">
+                      <Icon name="rocket" size={18} />
+                    </span>
                     <h3>Developer Setup Guide</h3>
                   </div>
                   <div className="setup-header-actions">
@@ -1395,7 +1508,10 @@ function App() {
                           <span>Regenerating...</span>
                         </>
                       ) : (
-                        '↻ Regenerate'
+                        <>
+                          <Icon name="refresh" size={12} />
+                          <span>Regenerate</span>
+                        </>
                       )}
                     </button>
                   </div>
@@ -1420,11 +1536,11 @@ function App() {
                       >
                         {copiedCommand ? (
                           <>
-                            <span className="copy-icon">✓</span> Copied!
+                            <Icon name="check" size={12} /> Copied!
                           </>
                         ) : (
                           <>
-                            <span className="copy-icon">📋</span> Copy
+                            <Icon name="copy" size={12} /> Copy
                           </>
                         )}
                       </button>
@@ -1477,7 +1593,9 @@ function App() {
                 <div className="suggested-schema-container">
                   <div className="schema-header">
                     <div className="schema-title">
-                      <span className="schema-icon">🗄️</span>
+                      <span className="schema-icon">
+                        <Icon name="database" size={18} />
+                      </span>
                       <h3>Suggested Database Schema</h3>
                     </div>
                     <div className="schema-header-actions">
@@ -1495,14 +1613,17 @@ function App() {
                         disabled={Boolean(regeneratingSection.suggested_schema)}
                         title="Regenerate Suggested Database Schema"
                       >
-                        {regeneratingSection.suggested_schema ? (
-                          <>
-                            <span className="btn-spinner"></span>
-                            <span>Regenerating...</span>
-                          </>
-                        ) : (
-                          '↻ Regenerate'
-                        )}
+                      {regeneratingSection.suggested_schema ? (
+                        <>
+                          <span className="btn-spinner"></span>
+                          <span>Regenerating...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Icon name="refresh" size={12} />
+                          <span>Regenerate</span>
+                        </>
+                      )}
                       </button>
                     </div>
                   </div>
@@ -1512,7 +1633,9 @@ function App() {
                       <div key={tIdx} className="schema-table-card">
                         <div className="schema-table-header">
                           <div className="schema-table-title-group">
-                            <span className="schema-table-icon">📋</span>
+                            <span className="schema-table-icon">
+                              <Icon name="table" size={14} />
+                            </span>
                             <h4 className="schema-table-name">
                               <code>{table.table_name}</code>
                             </h4>
@@ -1579,7 +1702,10 @@ function App() {
                       <span>Regenerating...</span>
                     </>
                   ) : (
-                    '↻ Regenerate'
+                    <>
+                      <Icon name="refresh" size={12} />
+                      <span>Regenerate</span>
+                    </>
                   )}
                 </button>
               </div>
@@ -1625,6 +1751,13 @@ function App() {
                                     }}
                                     aria-label={`Mark task completed: ${task}`}
                                   />
+                                  <span
+                                    className="task-checkbox"
+                                    aria-hidden="true"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    <Icon name="check" size={11} />
+                                  </span>
                                   <label
                                     htmlFor={checkboxId}
                                     className="task-text"
@@ -1648,7 +1781,9 @@ function App() {
             <div className="roadmap-chat-container" id="roadmap-chat-container">
               <div className="roadmap-chat-header">
                 <div className="roadmap-chat-title-group">
-                  <span className="chat-section-icon">💬</span>
+                  <span className="chat-section-icon">
+                    <Icon name="message" size={20} />
+                  </span>
                   <div>
                     <h3>Questions &amp; Roadmap Adjustments</h3>
                     <p className="chat-section-subtitle">
@@ -1671,7 +1806,8 @@ function App() {
                           handleSendRoadmapChat(e, 'why is week 2 focused on auth?')
                         }
                       >
-                        ❓ Why is week 2 focused on auth?
+                        <Icon name="help" size={12} />
+                        Why is week 2 focused on auth?
                       </button>
                       <button
                         type="button"
@@ -1680,7 +1816,8 @@ function App() {
                           handleSendRoadmapChat(e, 'simplify week 3')
                         }
                       >
-                        ⚡ Simplify week 3
+                        <Icon name="zap" size={12} />
+                        Simplify week 3
                       </button>
                       <button
                         type="button"
@@ -1689,7 +1826,8 @@ function App() {
                           handleSendRoadmapChat(e, 'can I use Vue instead of React?')
                         }
                       >
-                        🔄 Can I use Vue instead of React?
+                        <Icon name="refresh" size={12} />
+                        Can I use Vue instead of React?
                       </button>
                     </div>
                   </div>
@@ -1723,7 +1861,7 @@ function App() {
                                 </span>
                                 {msg.applied ? (
                                   <span className="applied-pill">
-                                    ✓ Applied to Roadmap
+                                    <Icon name="check" size={12} /> Applied to Roadmap
                                   </span>
                                 ) : (
                                   <button
@@ -1744,7 +1882,10 @@ function App() {
                                         <span>Applying...</span>
                                       </>
                                     ) : (
-                                      '⚡ Apply this change'
+                                      <>
+                                        <Icon name="zap" size={12} />
+                                        Apply this change
+                                      </>
                                     )}
                                   </button>
                                 )}
@@ -1775,7 +1916,9 @@ function App() {
 
                 {roadmapChatError && (
                   <div className="error-banner">
-                    <div className="error-text">⚠️ {roadmapChatError}</div>
+                    <div className="error-text">
+                      <Icon name="warning" size={14} /> {roadmapChatError}
+                    </div>
                     <button
                       className="btn-retry"
                       type="button"
@@ -1834,7 +1977,8 @@ function App() {
                       setCompareError(null)
                     }}
                   >
-                    💡 Single Idea
+                    <Icon name="bulb" size={14} />
+                    Single Idea
                   </button>
                   <button
                     type="button"
@@ -1849,7 +1993,8 @@ function App() {
                       setError(null)
                     }}
                   >
-                    ⚖️ Compare Ideas
+                    <Icon name="scale" size={14} />
+                    Compare Ideas
                   </button>
                 </div>
 
@@ -1886,7 +2031,8 @@ function App() {
                           )
                         }
                       >
-                        🎓 Campus Study Group Finder
+                        <Icon name="cap" size={12} />
+                        Campus Study Group Finder
                       </button>
                       <button
                         type="button"
@@ -1897,7 +2043,8 @@ function App() {
                           )
                         }
                       >
-                        💳 Subscription Renewal Tracker
+                        <Icon name="card" size={12} />
+                        Subscription Renewal Tracker
                       </button>
                       <button
                         type="button"
@@ -1908,13 +2055,16 @@ function App() {
                           )
                         }
                       >
-                        🧠 YouTube Lecture Flashcards
+                        <Icon name="book" size={12} />
+                        YouTube Lecture Flashcards
                       </button>
                     </div>
 
                     {error && (
                       <div className="error-banner">
-                        <div className="error-text">⚠️ {error}</div>
+                        <div className="error-text">
+                          <Icon name="warning" size={14} /> {error}
+                        </div>
                         <button className="btn-retry" type="button" onClick={handleRetry}>
                           Retry
                         </button>
@@ -1928,7 +2078,14 @@ function App() {
                         disabled={!idea.trim() || isLoading}
                         id="btn-start-scoping"
                       >
-                        {isLoading ? 'Starting...' : 'Start Scoping →'}
+                        {isLoading ? (
+                          <>
+                            <span className="btn-spinner"></span>
+                            <span>Starting...</span>
+                          </>
+                        ) : (
+                          'Start Scoping →'
+                        )}
                       </button>
                     </div>
                   </div>
@@ -1958,7 +2115,8 @@ function App() {
                                     title="Remove this idea"
                                     id={`btn-remove-idea-${idx}`}
                                   >
-                                    ✕ Remove
+                                    <Icon name="logout" size={12} className="icon-x" />
+                                    Remove
                                   </button>
                                 )}
                               </div>
@@ -2000,13 +2158,26 @@ function App() {
                             disabled={isComparing}
                             id="btn-load-compare-examples"
                           >
-                            ⚡ Load 3 Example Ideas
+                            <Icon name="zap" size={12} />
+                            Load 3 Example Ideas
                           </button>
                         </div>
 
+                        {isComparing && (
+                          <div className="compare-loading-skeleton" aria-live="polite" aria-busy="true">
+                            <div className="skeleton-cards-row">
+                              <div className="skeleton-box skeleton-shimmer"></div>
+                              <div className="skeleton-box skeleton-shimmer"></div>
+                            </div>
+                            <div className="skeleton-block skeleton-shimmer"></div>
+                          </div>
+                        )}
+
                         {compareError && (
                           <div className="error-banner">
-                            <div className="error-text">⚠️ {compareError}</div>
+                            <div className="error-text">
+                            <Icon name="warning" size={14} /> {compareError}
+                          </div>
                             <button
                               className="btn-retry"
                               type="button"
@@ -2033,12 +2204,16 @@ function App() {
                                 <span>Evaluating &amp; Comparing Ideas...</span>
                               </>
                             ) : (
-                              '⚖️ Compare Ideas →'
+                              <>
+                                <Icon name="scale" size={14} />
+                                Compare Ideas →
+                              </>
                             )}
                           </button>
                         </div>
                       </div>
                     ) : (
+                      /* Results View: Side-by-side comparison table/cards + Highlighted Recommendation */
                       /* Results View: Side-by-side comparison table/cards + Highlighted Recommendation */
                       <div className="compare-results-view">
                         <div className="compare-results-header">
@@ -2082,7 +2257,7 @@ function App() {
                               <div className="comp-metric-row">
                                 <span className="comp-metric-label">Estimated Timeline</span>
                                 <span className="comp-metric-val">
-                                  ⏱️ {item.estimated_weeks}{' '}
+                                  <Icon name="clock" size={12} /> {item.estimated_weeks}{' '}
                                   {item.estimated_weeks === 1 ? 'Week' : 'Weeks'}
                                 </span>
                               </div>
@@ -2090,7 +2265,10 @@ function App() {
                               <div className="comp-factors">
                                 <div className="comp-factor-block pros-block">
                                   <div className="factor-title">
-                                    <span className="factor-icon">✓</span> Pros &amp; Advantages
+                                    <span className="factor-icon">
+                                      <Icon name="check" size={12} />
+                                    </span>{' '}
+                                    Pros &amp; Advantages
                                   </div>
                                   <ul className="factor-list">
                                     {(item.pros || []).map((pro, pIdx) => (
@@ -2101,7 +2279,10 @@ function App() {
 
                                 <div className="comp-factor-block cons-block">
                                   <div className="factor-title">
-                                    <span className="factor-icon">⚠️</span> Cons &amp; Challenges
+                                    <span className="factor-icon">
+                                      <Icon name="warning" size={12} />
+                                    </span>{' '}
+                                    Cons &amp; Challenges
                                   </div>
                                   <ul className="factor-list">
                                     {(item.cons || []).map((con, cIdx) => (
@@ -2132,7 +2313,9 @@ function App() {
                           id="comparison-recommendation"
                         >
                           <div className="recommendation-header">
-                            <span className="rec-icon">💡</span>
+                            <span className="rec-icon">
+                              <Icon name="bulb" size={22} />
+                            </span>
                             <div>
                               <h4>Architect&apos;s Recommendation &amp; Trade-Offs</h4>
                               <span className="rec-subtitle">
@@ -2187,20 +2370,61 @@ function App() {
                   {isLoading && (
                     <div className="message-row message-assistant">
                       <div className="message-avatar">AI</div>
-                      <div className="message-bubble loading-bubble">
-                        <span className="dot-pulse"></span>
-                        <span className="loading-text">
-                          {previousAnswers.length >= 3
-                            ? 'Synthesizing your full project roadmap...'
-                            : 'Thinking of clarifying questions...'}
-                        </span>
-                      </div>
+                      {previousAnswers.length >= 3 ||
+                      (messages.length > 0 &&
+                        /just generate|generate it|skip/i.test(
+                          messages[messages.length - 1]?.text || ''
+                        )) ? (
+                        <div
+                          className="roadmap-generating-card"
+                          aria-live="polite"
+                          aria-busy="true"
+                        >
+                          <div className="roadmap-generating-header">
+                            <span className="btn-spinner generating-spinner"></span>
+                            <div className="generating-text-group">
+                              <span className="generating-title">
+                                Synthesizing your full project roadmap...
+                              </span>
+                              <span className="generating-subtitle">
+                                Generating milestones, tech stack, and database schema
+                              </span>
+                            </div>
+                          </div>
+                          <div className="roadmap-generating-skeleton">
+                            <div className="skeleton-row">
+                              <div
+                                className="skeleton-bar skeleton-shimmer"
+                                style={{ width: '48%' }}
+                              ></div>
+                              <div
+                                className="skeleton-bar skeleton-shimmer"
+                                style={{ width: '22%' }}
+                              ></div>
+                            </div>
+                            <div className="skeleton-cards-row">
+                              <div className="skeleton-box skeleton-shimmer"></div>
+                              <div className="skeleton-box skeleton-shimmer"></div>
+                            </div>
+                            <div className="skeleton-block skeleton-shimmer"></div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="message-bubble loading-bubble">
+                          <span className="btn-spinner" style={{ width: 14, height: 14 }}></span>
+                          <span className="loading-text">
+                            Analyzing your project idea and formulating questions...
+                          </span>
+                        </div>
+                      )}
                     </div>
                   )}
 
                   {error && (
                     <div className="error-banner">
-                      <div className="error-text">⚠️ {error}</div>
+                      <div className="error-text">
+                          <Icon name="warning" size={14} /> {error}
+                        </div>
                       <button className="btn-retry" type="button" onClick={handleRetry}>
                         Retry
                       </button>
