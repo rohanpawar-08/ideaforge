@@ -37,6 +37,16 @@ def test_schema_validator():
             },
             "mvp_features": ["Timer display", "Streak counter"],
             "stretch_features": ["Discord webhook integration"],
+            "suggested_schema": [
+                {
+                    "table_name": "habits",
+                    "fields": [
+                        {"name": "id", "type": "integer", "notes": "primary key, auto-increment"},
+                        {"name": "title", "type": "text", "notes": "habit name"},
+                        {"name": "created_at", "type": "timestamp", "notes": "default current_timestamp"}
+                    ]
+                }
+            ],
             "milestones": [
                 {
                     "week": 1,
@@ -51,6 +61,20 @@ def test_schema_validator():
     assert errors == [], f"Expected 0 errors for valid roadmap, got: {errors}"
     print("✔ Valid roadmap passed validation.")
     
+    # Missing suggested_schema
+    invalid_no_schema = json.loads(json.dumps(valid_obj))
+    del invalid_no_schema["data"]["suggested_schema"]
+    errors_no_schema = main.validate_roadmap_schema(invalid_no_schema)
+    assert any("suggested_schema" in e for e in errors_no_schema), f"Expected error for missing suggested_schema, got: {errors_no_schema}"
+    print(f"✔ Missing suggested_schema correctly rejected: {errors_no_schema}")
+
+    # Invalid table format in suggested_schema
+    invalid_table = json.loads(json.dumps(valid_obj))
+    invalid_table["data"]["suggested_schema"] = [{"table_name": "", "fields": []}]
+    errors_table = main.validate_roadmap_schema(invalid_table)
+    assert any("table_name" in e for e in errors_table), f"Expected error for invalid table_name, got: {errors_table}"
+    print(f"✔ Invalid table format correctly rejected: {errors_table}")
+
     # Missing difficulty_breakdown
     invalid_no_diff = json.loads(json.dumps(valid_obj))
     del invalid_no_diff["data"]["difficulty_breakdown"]

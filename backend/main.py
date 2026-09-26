@@ -153,6 +153,7 @@ SYSTEM_PROMPT = (
     '"estimated_weeks": <number>, '
     '"recommended_stack": ["<tech>"], '
     '"setup_guide": {"primary_language": "<string>", "editor_recommendation": "<string>", "key_tools": [{"name": "<string>", "purpose": "<string>"}], "getting_started_command": "<string>"}, '
+    '"suggested_schema": [{"table_name": "<string>", "fields": [{"name": "<string>", "type": "<string>", "notes": "<string>"}]}], '
     '"mvp_features": ["<feature>"], "stretch_features": ["<feature>"], '
     '"milestones": [{"week": <number>, "goal": "<goal>", "tasks": ["<task>"]}]}}'
 )
@@ -172,6 +173,15 @@ ROADMAP_SYSTEM_PROMPT = (
     "In addition to the overall 'feasibility' level (beginner, intermediate, or advanced), provide a granular 'difficulty_breakdown' object "
     "evaluating: frontend_complexity, backend_complexity, database_complexity, ai_complexity (use 'not_applicable' if the project has no AI component), "
     "and deployment_complexity. Each must be rated strictly one of: 'beginner', 'intermediate', 'advanced', or 'not_applicable'.\n\n"
+    "3. Suggested Schema:\n"
+    "Provide a 'suggested_schema' list of table objects. Each table object must have:\n"
+    "- 'table_name': string\n"
+    "- 'fields': list of field objects, each with:\n"
+    "  * 'name': string (field or column name)\n"
+    "  * 'type': string (data type, e.g. integer, string, text, boolean, timestamp, json)\n"
+    "  * 'notes': string (plain-text notes flagging things like 'primary key', 'foreign key to X', 'unique', etc. — not a full SQL constraint syntax)\n"
+    "Keep this simple — no ER diagram, just a clear list. Only include tables that are actually relevant to the project idea "
+    "(e.g. do not force a 'users' table if the idea has no user accounts or authentication).\n\n"
     "Respond ONLY in this exact JSON schema, with no additional commentary or markdown wrapping:\n"
     "{\n"
     '  "type": "roadmap",\n'
@@ -197,6 +207,18 @@ ROADMAP_SYSTEM_PROMPT = (
     '      ],\n'
     '      "getting_started_command": "<very first terminal command to run to start the project, e.g. npm create vite@latest>"\n'
     '    },\n'
+    '    "suggested_schema": [\n'
+    '      {\n'
+    '        "table_name": "<table_name>",\n'
+    '        "fields": [\n'
+    '          {\n'
+    '            "name": "<field_name>",\n'
+    '            "type": "<data_type>",\n'
+    '            "notes": "<plain text note, e.g. primary key, foreign key to X, unique>"\n'
+    '          }\n'
+    '        ]\n'
+    '      }\n'
+    '    ],\n'
     '    "mvp_features": ["<feature1>", "<feature2>"],\n'
     '    "stretch_features": ["<feature1>", "<feature2>"],\n'
     '    "milestones": [\n'
@@ -306,6 +328,35 @@ def validate_roadmap_schema(obj: dict) -> list[str]:
                     errors.append(f"'data.setup_guide.key_tools[{idx}].name' must be a non-empty string.")
                 if not isinstance(tool.get("purpose"), str) or not tool.get("purpose").strip():
                     errors.append(f"'data.setup_guide.key_tools[{idx}].purpose' must be a non-empty string.")
+
+    suggested_schema = data.get("suggested_schema")
+    if not isinstance(suggested_schema, list):
+        errors.append("'data.suggested_schema' must be a list of table objects.")
+    else:
+        for t_idx, table in enumerate(suggested_schema):
+            if not isinstance(table, dict):
+                errors.append(f"'data.suggested_schema[{t_idx}]' must be an object.")
+                continue
+            table_name = table.get("table_name")
+            if not isinstance(table_name, str) or not table_name.strip():
+                errors.append(f"'data.suggested_schema[{t_idx}].table_name' must be a non-empty string.")
+            fields = table.get("fields")
+            if not isinstance(fields, list):
+                errors.append(f"'data.suggested_schema[{t_idx}].fields' must be a list of field objects.")
+            else:
+                for f_idx, field in enumerate(fields):
+                    if not isinstance(field, dict):
+                        errors.append(f"'data.suggested_schema[{t_idx}].fields[{f_idx}]' must be an object.")
+                        continue
+                    if not isinstance(field.get("name"), str) or not field.get("name").strip():
+                        errors.append(f"'data.suggested_schema[{t_idx}].fields[{f_idx}].name' must be a non-empty string.")
+                    if not isinstance(field.get("type"), str) or not field.get("type").strip():
+                        errors.append(f"'data.suggested_schema[{t_idx}].fields[{f_idx}].type' must be a non-empty string.")
+                    notes_val = field.get("notes")
+                    if notes_val is None:
+                        field["notes"] = ""
+                    elif not isinstance(notes_val, str):
+                        field["notes"] = str(notes_val)
 
     milestones = data.get("milestones")
     if not isinstance(milestones, list) or len(milestones) == 0:
@@ -423,6 +474,18 @@ def generate_roadmap_with_validation(messages: list[dict]) -> dict:
                 '      ],\n'
                 '      "getting_started_command": "<very first terminal command to run to start the project, e.g. npm create vite@latest>"\n'
                 '    },\n'
+                '    "suggested_schema": [\n'
+                '      {\n'
+                '        "table_name": "<table_name>",\n'
+                '        "fields": [\n'
+                '          {\n'
+                '            "name": "<field_name>",\n'
+                '            "type": "<data_type>",\n'
+                '            "notes": "<plain text note, e.g. primary key, foreign key to X, unique>"\n'
+                '          }\n'
+                '        ]\n'
+                '      }\n'
+                '    ],\n'
                 '    "mvp_features": ["<feature1>", "<feature2>"],\n'
                 '    "stretch_features": ["<feature1>", "<feature2>"],\n'
                 '    "milestones": [\n'
@@ -593,12 +656,14 @@ def regenerate_roadmap_section(
         target_key = "recommended_stack"
     elif section_raw in ["setup_guide", "setup", "setupguide"]:
         target_key = "setup_guide"
+    elif section_raw in ["suggested_schema", "schema", "database", "database_schema", "tables"]:
+        target_key = "suggested_schema"
     elif section_raw in ["milestones", "milestone"]:
         target_key = "milestones"
     else:
         raise HTTPException(
             status_code=400,
-            detail="Invalid section. Must be 'stack', 'setup_guide', or 'milestones'.",
+            detail="Invalid section. Must be 'stack', 'setup_guide', 'suggested_schema', or 'milestones'.",
         )
 
     roadmap = (
@@ -641,7 +706,7 @@ def regenerate_roadmap_section(
     if target_key == "recommended_stack":
         system_prompt = (
             "You are a technical project planning assistant. The user wants to regenerate ONLY the recommended tech stack for their project.\n"
-            "Keep everything else about the project (feasibility, timeline, setup guide, MVP features, milestones) consistent.\n"
+            "Keep everything else about the project (feasibility, timeline, setup guide, suggested schema, MVP features, milestones) consistent.\n"
             "Respond ONLY with a valid JSON object in this format:\n"
             '{\n  "recommended_stack": ["<tech1>", "<tech2>", "<tech3>"]\n}'
         )
@@ -653,7 +718,7 @@ def regenerate_roadmap_section(
     elif target_key == "setup_guide":
         system_prompt = (
             "You are a technical project planning assistant. The user wants to regenerate ONLY the developer setup guide for their project roadmap.\n"
-            "Keep everything else about the project (idea, stack, MVP features, milestones) consistent.\n"
+            "Keep everything else about the project (idea, stack, suggested schema, MVP features, milestones) consistent.\n"
             "Respond ONLY with a valid JSON object in this format:\n"
             "{\n"
             '  "setup_guide": {\n'
@@ -670,6 +735,31 @@ def regenerate_roadmap_section(
             f"Original Idea: {original_idea}{prev_answers_text}\n\n"
             f"Current Full Roadmap Data:\n{full_roadmap_json}\n\n"
             "Regenerate ONLY the developer setup guide (primary language, editor recommendation, key tools, getting started command) while keeping everything else consistent."
+        )
+    elif target_key == "suggested_schema":
+        system_prompt = (
+            "You are a technical project planning assistant. The user wants to regenerate ONLY the suggested database schema for their project roadmap.\n"
+            "Keep everything else about the project (idea, stack, setup guide, MVP features, milestones) consistent.\n"
+            "Respond ONLY with a valid JSON object in this format:\n"
+            "{\n"
+            '  "suggested_schema": [\n'
+            '    {\n'
+            '      "table_name": "<table_name>",\n'
+            '      "fields": [\n'
+            '        {\n'
+            '          "name": "<field_name>",\n'
+            '          "type": "<data_type>",\n'
+            '          "notes": "<plain text note, e.g. primary key, foreign key to X, unique>"\n'
+            '        }\n'
+            '      ]\n'
+            '    }\n'
+            '  ]\n'
+            "}"
+        )
+        user_prompt = (
+            f"Original Idea: {original_idea}{prev_answers_text}\n\n"
+            f"Current Full Roadmap Data:\n{full_roadmap_json}\n\n"
+            "Regenerate ONLY the suggested database schema (tables and their fields) while keeping everything else consistent."
         )
     else:  # milestones
         system_prompt = (
@@ -712,6 +802,14 @@ def regenerate_roadmap_section(
             updated_section_data = llm_response.get("setup_guide") or llm_response
             if not isinstance(updated_section_data, dict):
                 raise ValueError("setup_guide must be a JSON object")
+        elif target_key == "suggested_schema":
+            updated_section_data = (
+                llm_response.get("suggested_schema")
+                or llm_response.get("schema")
+                or (llm_response if isinstance(llm_response, list) else [])
+            )
+            if not isinstance(updated_section_data, list):
+                raise ValueError("suggested_schema must be a list of table objects")
         else:  # milestones
             updated_section_data = (
                 llm_response.get("milestones")
@@ -804,10 +902,10 @@ def ask_about_roadmap(
         "{\n"
         '  "reply": "<helpful, conversational text response>",\n'
         '  "proposed_change": null | {\n'
-        '    "section": "stack" | "setup_guide" | "milestones",\n'
-        '    "target_key": "recommended_stack" | "setup_guide" | "milestones",\n'
+        '    "section": "stack" | "setup_guide" | "suggested_schema" | "milestones",\n'
+        '    "target_key": "recommended_stack" | "setup_guide" | "suggested_schema" | "milestones",\n'
         '    "summary": "<short description of what was changed>",\n'
-        '    "data": <the full updated section: list for stack, object for setup_guide, or list of milestones for milestones>\n'
+        '    "data": <the full updated section: list for stack, object for setup_guide, list of tables for suggested_schema, or list of milestones for milestones>\n'
         "  }\n"
         "}"
     )
@@ -839,6 +937,11 @@ def ask_about_roadmap(
             elif "setup" in section_raw:
                 proposed_change["section"] = "setup_guide"
                 proposed_change["target_key"] = "setup_guide"
+            elif "schema" in section_raw or "table" in section_raw or "database" in section_raw:
+                proposed_change["section"] = "suggested_schema"
+                proposed_change["target_key"] = "suggested_schema"
+                if not isinstance(proposed_change["data"], list):
+                    proposed_change = None
             elif "milestone" in section_raw or "week" in section_raw:
                 proposed_change["section"] = "milestones"
                 proposed_change["target_key"] = "milestones"
@@ -885,12 +988,14 @@ def apply_roadmap_change(
         target_key = "recommended_stack"
     elif section_raw in ["setup_guide", "setup", "setupguide"]:
         target_key = "setup_guide"
+    elif section_raw in ["suggested_schema", "schema", "database", "database_schema", "tables"]:
+        target_key = "suggested_schema"
     elif section_raw in ["milestones", "milestone"]:
         target_key = "milestones"
     else:
         raise HTTPException(
             status_code=400,
-            detail="Invalid section. Must be 'stack', 'setup_guide', or 'milestones'.",
+            detail="Invalid section. Must be 'stack', 'setup_guide', 'suggested_schema', or 'milestones'.",
         )
 
     current_data = dict(roadmap.data) if isinstance(roadmap.data, dict) else {}

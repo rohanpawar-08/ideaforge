@@ -230,6 +230,65 @@ export function buildRoadmapPdf(roadmap, fallbackIdea = '') {
     }
   }
 
+  // --- Suggested Database Schema ---
+  if (
+    roadmap?.suggested_schema &&
+    Array.isArray(roadmap.suggested_schema) &&
+    roadmap.suggested_schema.length > 0
+  ) {
+    checkPageBreak(85)
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(11)
+    doc.setTextColor(37, 99, 235)
+    doc.text('SUGGESTED DATABASE SCHEMA', margin, y)
+    y += 16
+
+    roadmap.suggested_schema.forEach((table) => {
+      checkPageBreak(40)
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(10)
+      doc.setTextColor(15, 23, 42)
+      doc.text(`Table: ${table.table_name || 'unnamed_table'}`, margin, y)
+      y += 14
+
+      if (table.fields && Array.isArray(table.fields) && table.fields.length > 0) {
+        table.fields.forEach((field) => {
+          checkPageBreak(18)
+          doc.setFont('helvetica', 'bold')
+          doc.setFontSize(9)
+          doc.setTextColor(37, 99, 235)
+          const nameText = `  • ${field.name || 'field'}`
+          doc.text(nameText, margin + 6, y)
+          const nameW = doc.getTextWidth(nameText)
+
+          doc.setFont('courier', 'bold')
+          doc.setFontSize(8.5)
+          doc.setTextColor(100, 116, 139)
+          const typeText = ` [${field.type || 'text'}]`
+          doc.text(typeText, margin + 6 + nameW, y)
+          const typeW = doc.getTextWidth(typeText)
+
+          if (field.notes) {
+            doc.setFont('helvetica', 'normal')
+            doc.setFontSize(8.5)
+            doc.setTextColor(51, 65, 85)
+            const notesText = ` - ${field.notes}`
+            const splitNotes = doc.splitTextToSize(
+              notesText,
+              contentWidth - (12 + nameW + typeW)
+            )
+            doc.text(splitNotes, margin + 6 + nameW + typeW, y)
+            y += splitNotes.length * 11 + 3
+          } else {
+            y += 13
+          }
+        })
+      }
+      y += 8
+    })
+    y += 4
+  }
+
   // --- 4. Feature Scopes (MVP & Stretch) ---
   const hasMvp = roadmap?.mvp_features && roadmap.mvp_features.length > 0
   const hasStretch =

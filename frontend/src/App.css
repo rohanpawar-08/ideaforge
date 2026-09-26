@@ -1116,6 +1116,207 @@ input[type='text']:focus {
   color: var(--color-text-muted);
 }
 
+/* Suggested Database Schema Section */
+.suggested-schema-container {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 28px;
+  box-shadow: var(--shadow-sm);
+}
+
+.schema-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.schema-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.schema-title h3 {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--color-text-main);
+  letter-spacing: -0.01em;
+}
+
+.schema-icon {
+  font-size: 20px;
+}
+
+.schema-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.schema-badge {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: var(--color-blue-bg);
+  color: var(--color-blue-text);
+  padding: 3px 10px;
+  border-radius: 9999px;
+  border: 1px solid var(--color-blue-border);
+}
+
+.schema-tables-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 18px;
+}
+
+.schema-table-card {
+  background: var(--color-surface-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.schema-table-card:hover {
+  border-color: var(--color-border-hover);
+  box-shadow: var(--shadow-sm);
+}
+
+.schema-table-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 10px;
+}
+
+.schema-table-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.schema-table-icon {
+  font-size: 16px;
+}
+
+.schema-table-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--color-text-main);
+  margin: 0;
+}
+
+.schema-table-name code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: var(--color-primary);
+  background: var(--color-primary-light);
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+
+.schema-field-count {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.schema-fields-table {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.schema-fields-thead {
+  display: grid;
+  grid-template-columns: 130px 90px 1fr;
+  gap: 10px;
+  padding: 4px 6px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-dim);
+  border-bottom: 1px dashed var(--color-border);
+}
+
+.schema-fields-tbody {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.schema-field-row {
+  display: grid;
+  grid-template-columns: 130px 90px 1fr;
+  gap: 10px;
+  align-items: baseline;
+  padding: 6px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-subtle);
+  transition: background 0.15s ease;
+}
+
+.schema-field-row:hover {
+  background: var(--color-border-subtle);
+}
+
+.td-name code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-weight: 600;
+  color: var(--color-text-main);
+  font-size: 12.5px;
+}
+
+.type-badge {
+  display: inline-block;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 1px 7px;
+  border-radius: 4px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+}
+
+.td-notes {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  line-height: 1.35;
+}
+
+.notes-text {
+  color: var(--color-text-muted);
+}
+
+.notes-empty {
+  color: var(--color-text-dim);
+}
+
+@media (max-width: 520px) {
+  .schema-fields-thead {
+    display: none;
+  }
+
+  .schema-field-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+}
+
 /* Header Actions */
 .header-actions {
   display: flex;

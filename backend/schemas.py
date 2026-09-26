@@ -9,7 +9,7 @@ class IdeaRequest(BaseModel):
 
 
 class RegenerateRequest(BaseModel):
-    section: str  # "stack", "setup_guide", or "milestones"
+    section: str  # "stack", "setup_guide", "suggested_schema", or "milestones"
     previous_answers: Optional[list[str]] = None
 
 
