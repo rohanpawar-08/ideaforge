@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { downloadRoadmapPdf } from './pdfExport'
+import { downloadRoadmapReadme } from './readmeExport'
 import './App.css'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
@@ -253,6 +254,20 @@ function App() {
     } catch (err) {
       console.error('Failed to export roadmap as PDF:', err)
       alert('Failed to generate PDF. Please try again.')
+    }
+  }
+
+  // Generate and download roadmap as clean, GitHub-style README.md
+  const handleDownloadReadme = () => {
+    if (!roadmap) return
+    try {
+      const md = downloadRoadmapReadme(roadmap, roadmap.original_idea || idea)
+      if (typeof window !== 'undefined') {
+        window.__lastGeneratedReadme = md
+      }
+    } catch (err) {
+      console.error('Failed to export roadmap as README.md:', err)
+      alert('Failed to generate README. Please try again.')
     }
   }
 
@@ -1120,6 +1135,15 @@ function App() {
                 <div className="toolbar-right-actions">
                   <button
                     type="button"
+                    className="btn-secondary btn-xs btn-generate-readme"
+                    onClick={handleDownloadReadme}
+                    id="btn-generate-readme-toolbar"
+                    title="Generate and download README.md"
+                  >
+                    📄 README
+                  </button>
+                  <button
+                    type="button"
                     className="btn-secondary btn-xs btn-download-pdf"
                     onClick={handleDownloadPdf}
                     id="btn-download-pdf-toolbar"
@@ -1197,6 +1221,15 @@ function App() {
                   )}
                 </div>
                 <div className="roadmap-header-actions">
+                  <button
+                    type="button"
+                    className="btn-secondary btn-sm btn-generate-readme"
+                    onClick={handleDownloadReadme}
+                    id="btn-generate-readme"
+                    title="Generate and download README.md as a formatted file"
+                  >
+                    📄 Generate README
+                  </button>
                   <button
                     type="button"
                     className="btn-secondary btn-sm btn-download-pdf"

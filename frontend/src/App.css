@@ -1643,7 +1643,8 @@ input[type='text']:focus {
   gap: 10px;
 }
 
-.btn-download-pdf {
+.btn-download-pdf,
+.btn-generate-readme {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -1654,14 +1655,16 @@ input[type='text']:focus {
   transition: all 0.15s ease;
 }
 
-.btn-download-pdf:hover {
+.btn-download-pdf:hover,
+.btn-generate-readme:hover {
   background-color: var(--color-primary-light);
   border-color: var(--color-blue-border);
   color: var(--color-primary);
   transform: translateY(-1px);
 }
 
-.btn-download-pdf:active {
+.btn-download-pdf:active,
+.btn-generate-readme:active {
   transform: translateY(0);
 }
 
