@@ -1,6 +1,12 @@
 import { useState, useRef, useEffect } from 'react'
 import { downloadRoadmapPdf } from './pdfExport'
 import { downloadRoadmapReadme } from './readmeExport'
+import {
+  downloadSrsDocument,
+  downloadSynopsisDocument,
+  downloadVivaDocument,
+  getBeginnerGuideItems,
+} from './docsExport'
 import './App.css'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
@@ -56,6 +62,8 @@ function Icon({ name, size = 16, className = '' }) {
     check: 'M20 6L9 17l-5-5',
     warning:
       'M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01',
+    chevronDown: 'M6 9l6 6 6-6',
+    chevronUp: 'M18 15l-6-6-6 6',
   }
   const pathData = iconPaths[name] || iconPaths.sparkles
   return (
@@ -160,6 +168,14 @@ function App() {
     return 'light'
   })
 
+  // Project Documents dropdown states
+  const [docsMenuOpen, setDocsMenuOpen] = useState(false)
+  const [isGeneratingViva, setIsGeneratingViva] = useState(false)
+  const docsDropdownRef = useRef(null)
+
+  // Beginner's Guide collapsible section state (defaults to expanded)
+  const [beginnerGuideExpanded, setBeginnerGuideExpanded] = useState(true)
+
   // Synchronize document data-theme attribute and localStorage on theme change
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
@@ -169,6 +185,22 @@ function App() {
       console.warn(e)
     }
   }, [theme])
+
+  // Close documents menu on outside click
+  useEffect(() => {
+    const handleOutsideClick = (e) => {
+      if (docsDropdownRef.current && !docsDropdownRef.current.contains(e.target)) {
+        setDocsMenuOpen(false)
+      }
+    }
+    if (docsMenuOpen) {
+      document.addEventListener('mousedown', handleOutsideClick)
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick)
+    }
+  }, [docsMenuOpen])
+
 
   // Listen for system theme changes if user hasn't explicitly set a preference
   useEffect(() => {
@@ -327,6 +359,76 @@ function App() {
       alert('Failed to generate README. Please try again.')
     }
   }
+
+  // Generate and download academic-standard SRS Document
+  const handleDownloadSrs = () => {
+    if (!roadmap) return
+    setDocsMenuOpen(false)
+    try {
+      const md = downloadSrsDocument(roadmap, roadmap.original_idea || idea)
+      if (typeof window !== 'undefined') {
+        window.__lastGeneratedSrs = md
+      }
+    } catch (err) {
+      console.error('Failed to export SRS Document:', err)
+      alert('Failed to generate SRS document. Please try again.')
+    }
+  }
+
+  // Generate and download concise 1-page Project Synopsis
+  const handleDownloadSynopsis = () => {
+    if (!roadmap) return
+    setDocsMenuOpen(false)
+    try {
+      const md = downloadSynopsisDocument(roadmap, roadmap.original_idea || idea)
+      if (typeof window !== 'undefined') {
+        window.__lastGeneratedSynopsis = md
+      }
+    } catch (err) {
+      console.error('Failed to export Synopsis:', err)
+      alert('Failed to generate Synopsis document. Please try again.')
+    }
+  }
+
+  // Generate 10-15 project-specific Viva questions via Groq LLM and download
+  const handleDownloadViva = async () => {
+    if (!roadmap || isGeneratingViva) return
+    setIsGeneratingViva(true)
+    try {
+      const roadmapId = roadmap.id || (roadmap.data && roadmap.data.id)
+      const payload = {
+        idea: roadmap.original_idea || idea,
+        roadmap_data: roadmap.data || roadmap,
+        roadmap_id: roadmapId || undefined,
+      }
+
+      let vivaData = null
+      try {
+        const res = await authFetch(`${API_URL}/roadmaps/viva`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+        if (res.ok) {
+          vivaData = await res.json()
+        }
+      } catch (fetchErr) {
+        console.warn('Network call for viva questions failed; using project fallback generator:', fetchErr)
+      }
+
+      const md = downloadVivaDocument(roadmap, vivaData, roadmap.original_idea || idea)
+      if (typeof window !== 'undefined') {
+        window.__lastGeneratedViva = md
+      }
+      setDocsMenuOpen(false)
+    } catch (err) {
+      console.error('Failed to export Viva Questions:', err)
+      alert('Failed to generate Viva questions. Please try again.')
+    } finally {
+      setIsGeneratingViva(false)
+    }
+  }
+
 
   // Logout handler: clears credentials, active roadmap, and resets view
   const handleLogout = () => {
@@ -900,6 +1002,33 @@ function App() {
       ? Math.round((completedTasksCount / totalTasksCount) * 100)
       : 0
 
+  // Beginner's Guide skill detection:
+  // Shown only when the user's stated skill level is beginner.
+  const isBeginnerUser = (() => {
+    if (!roadmap) return false
+    // 1. Explicit skill level in roadmap response (set by backend or model)
+    const rawSkill = roadmap.user_skill_level || roadmap.data?.user_skill_level
+    if (rawSkill) {
+      return String(rawSkill).toLowerCase().trim() === 'beginner'
+    }
+    // 2. Check previousAnswers / chat messages for explicit beginner statement
+    const textPool = [
+      ...(Array.isArray(previousAnswers) ? previousAnswers : []),
+      ...(Array.isArray(messages) ? messages.map((m) => m.content || '') : []),
+    ]
+    for (const txt of textPool) {
+      const lower = String(txt).toLowerCase()
+      if (/\b(beginner|novice|starter|learning to code|new to programming|just started|zero experience|first project|newbie)\b/i.test(lower)) {
+        return true
+      }
+    }
+    // 3. Fallback: feasibility is explicitly beginner
+    const feas = (roadmap.feasibility || roadmap.data?.feasibility || '').toLowerCase()
+    if (feas === 'beginner') return true
+
+    return false
+  })()
+
   return (
     <div className="app-container">
       {/* Header */}
@@ -1322,6 +1451,69 @@ function App() {
                   )}
                 </div>
                 <div className="roadmap-header-actions">
+                  <div className="docs-dropdown-container" ref={docsDropdownRef}>
+                    <button
+                      type="button"
+                      className="btn-secondary btn-sm btn-generate-docs"
+                      onClick={() => setDocsMenuOpen((prev) => !prev)}
+                      id="btn-generate-docs"
+                      aria-haspopup="true"
+                      aria-expanded={docsMenuOpen}
+                      title="Generate project documents (SRS, Synopsis, Viva Questions)"
+                    >
+                      <Icon name="book" size={14} />
+                      <span>📚 Generate Documents</span>
+                      <span className={`docs-caret ${docsMenuOpen ? 'open' : ''}`}>▾</span>
+                    </button>
+                    {docsMenuOpen && (
+                      <div className="docs-dropdown-menu" role="menu">
+                        <button
+                          type="button"
+                          className="docs-dropdown-item"
+                          onClick={handleDownloadSrs}
+                          id="btn-doc-srs"
+                          role="menuitem"
+                        >
+                          <span className="docs-item-badge">SRS</span>
+                          <div className="docs-item-content">
+                            <span className="docs-item-name">SRS Document</span>
+                            <span className="docs-item-desc">Academic IEEE-style specification</span>
+                          </div>
+                        </button>
+                        <button
+                          type="button"
+                          className="docs-dropdown-item"
+                          onClick={handleDownloadSynopsis}
+                          id="btn-doc-synopsis"
+                          role="menuitem"
+                        >
+                          <span className="docs-item-badge">SYN</span>
+                          <div className="docs-item-content">
+                            <span className="docs-item-name">Synopsis</span>
+                            <span className="docs-item-desc">Concise 1-page executive summary</span>
+                          </div>
+                        </button>
+                        <button
+                          type="button"
+                          className="docs-dropdown-item"
+                          onClick={handleDownloadViva}
+                          disabled={isGeneratingViva}
+                          id="btn-doc-viva"
+                          role="menuitem"
+                        >
+                          <span className="docs-item-badge">{isGeneratingViva ? '...' : 'Q&A'}</span>
+                          <div className="docs-item-content">
+                            <span className="docs-item-name">
+                              {isGeneratingViva ? 'Generating with AI...' : 'Viva Questions'}
+                            </span>
+                            <span className="docs-item-desc">
+                              {isGeneratingViva ? 'Calling Groq LLM for 10-15 model Q&As' : '10-15 interview Q&As with model answers'}
+                            </span>
+                          </div>
+                        </button>
+                      </div>
+                    )}
+                  </div>
                   <button
                     type="button"
                     className="btn-secondary btn-sm btn-generate-readme"
@@ -1583,6 +1775,113 @@ function App() {
                       </ul>
                     </div>
                   )}
+              </div>
+            )}
+
+            {/* Beginner's Guide Section (Collapsible, shown only for beginner users) */}
+            {isBeginnerUser && (
+              <div className="beginner-guide-container" id="beginner-guide-section">
+                <div
+                  className="beginner-guide-header"
+                  onClick={() => setBeginnerGuideExpanded(!beginnerGuideExpanded)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      setBeginnerGuideExpanded(!beginnerGuideExpanded)
+                    }
+                  }}
+                  aria-expanded={beginnerGuideExpanded}
+                  title="Click to toggle Beginner's Guide"
+                >
+                  <div className="beginner-guide-title">
+                    <span className="beginner-icon">
+                      <Icon name="book" size={18} />
+                    </span>
+                    <div className="beginner-title-text">
+                      <h3>Beginner's Guide</h3>
+                      <p className="beginner-subtitle">
+                        Plain-language explanations and curated learning paths tailored for beginners
+                      </p>
+                    </div>
+                  </div>
+                  <div className="beginner-header-actions">
+                    <span className="beginner-level-badge">Skill Level: Beginner</span>
+                    <button
+                      type="button"
+                      className="btn-toggle-beginner"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setBeginnerGuideExpanded(!beginnerGuideExpanded)
+                      }}
+                      aria-label={beginnerGuideExpanded ? 'Collapse Beginner Guide' : 'Expand Beginner Guide'}
+                    >
+                      <Icon name={beginnerGuideExpanded ? 'chevronUp' : 'chevronDown'} size={14} />
+                      <span>{beginnerGuideExpanded ? 'Collapse' : 'Expand'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {beginnerGuideExpanded && (
+                  <div className="beginner-guide-body">
+                    {/* General Suggestions Disclaimer Banner */}
+                    <div className="beginner-disclaimer-banner">
+                      <span className="disclaimer-icon">
+                        <Icon name="bulb" size={16} />
+                      </span>
+                      <div className="disclaimer-content">
+                        <strong>General Learning Suggestions:</strong> The resources below are specific, well-known, free learning paths (official documentation and recognized beginner courses) provided as general educational suggestions to kickstart your journey, not live-verified links. Feel free to explore other guides or tutorials that best fit your learning pace.
+                      </div>
+                    </div>
+
+                    {/* Cards Grid for Each Recommended Technology */}
+                    <div className="beginner-cards-grid">
+                      {getBeginnerGuideItems(roadmap, idea).map((item, idx) => (
+                        <div key={idx} className="beginner-card">
+                          <div className="beginner-card-header">
+                            <div className="beginner-tech-badge-group">
+                              <span className="beginner-tech-tag">{item.technology}</span>
+                              {item.category && (
+                                <span className="beginner-category-tag">{item.category}</span>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="beginner-explanation-block">
+                            <h4 className="beginner-block-title">What it is & Why it's used in this project</h4>
+                            <p className="beginner-explanation-text">{item.explanation}</p>
+                          </div>
+
+                          {item.learning_resource && (
+                            <div className="beginner-resource-box">
+                              <div className="beginner-resource-header">
+                                <span className="resource-icon">
+                                  <Icon name="cap" size={14} />
+                                </span>
+                                <span className="resource-label">Recommended Free Resource</span>
+                              </div>
+                              <p className="beginner-resource-name">
+                                <strong>{item.learning_resource.name}</strong>
+                              </p>
+                              {item.learning_resource.description && (
+                                <p className="beginner-resource-desc">
+                                  {item.learning_resource.description}
+                                </p>
+                              )}
+                              {item.learning_resource.url && (
+                                <p className="beginner-resource-url">
+                                  <span>Suggested link: </span>
+                                  <code>{item.learning_resource.url}</code>
+                                </p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 

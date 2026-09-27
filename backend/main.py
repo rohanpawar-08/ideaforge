@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -25,6 +26,7 @@ from schemas import (
     ApplyChangeRequest,
     UserAuthRequest,
     TokenResponse,
+    VivaRequest,
 )
 import models
 
@@ -95,6 +97,23 @@ def get_current_user(
         raise credentials_exception
 
     return user
+
+
+def get_optional_current_user(
+    auth: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    db: Session = Depends(get_db),
+) -> Optional[models.User]:
+    if not auth or not auth.credentials:
+        return None
+    try:
+        payload = decode_access_token(auth.credentials.strip())
+        user_id_str = payload.get("sub")
+        if not user_id_str:
+            return None
+        return db.query(models.User).filter(models.User.id == int(user_id_str)).first()
+    except Exception:
+        return None
+
 
 
 Base.metadata.create_all(bind=engine)
@@ -182,11 +201,19 @@ ROADMAP_SYSTEM_PROMPT = (
     "  * 'notes': string (plain-text notes flagging things like 'primary key', 'foreign key to X', 'unique', etc. — not a full SQL constraint syntax)\n"
     "Keep this simple — no ER diagram, just a clear list. Only include tables that are actually relevant to the project idea "
     "(e.g. do not force a 'users' table if the idea has no user accounts or authentication).\n\n"
+    "4. Stated Skill Level & Beginner's Guide:\n"
+    "Identify the user's stated technical skill level ('beginner', 'intermediate', or 'advanced') from their previous answers and provide 'user_skill_level'.\n"
+    "If the user's stated skill level is 'beginner':\n"
+    "Provide a 'beginner_guide' list containing an entry for each major technology in 'recommended_stack'. Each item must contain:\n"
+    "- 'technology': string (the technology name)\n"
+    "- 'explanation': string (a short plain-language explanation of what it is and why it's used in this project, 2-3 sentences, with ZERO jargon)\n"
+    "- 'learning_resource': object with 'name' (specific, real, well-known free learning resource, e.g. 'Official React Docs', 'freeCodeCamp Node.js Course'), 'url' (general website URL, e.g. 'https://react.dev'), and 'description' (one-line summary).\n\n"
     "Respond ONLY in this exact JSON schema, with no additional commentary or markdown wrapping:\n"
     "{\n"
     '  "type": "roadmap",\n'
     '  "data": {\n'
     '    "feasibility": "beginner|intermediate|advanced",\n'
+    '    "user_skill_level": "beginner|intermediate|advanced",\n'
     '    "difficulty_breakdown": {\n'
     '      "frontend_complexity": "beginner|intermediate|advanced|not_applicable",\n'
     '      "backend_complexity": "beginner|intermediate|advanced|not_applicable",\n'
@@ -207,6 +234,17 @@ ROADMAP_SYSTEM_PROMPT = (
     '      ],\n'
     '      "getting_started_command": "<very first terminal command to run to start the project, e.g. npm create vite@latest>"\n'
     '    },\n'
+    '    "beginner_guide": [\n'
+    '      {\n'
+    '        "technology": "<technology name>",\n'
+    '        "explanation": "<2-3 sentence plain language explanation without jargon>",\n'
+    '        "learning_resource": {\n'
+    '          "name": "<real well-known free learning resource>",\n'
+    '          "url": "<general resource URL>",\n'
+    '          "description": "<one-line description>"\n'
+    '        }\n'
+    '      }\n'
+    '    ],\n'
     '    "suggested_schema": [\n'
     '      {\n'
     '        "table_name": "<table_name>",\n'
@@ -385,50 +423,253 @@ def validate_roadmap_schema(obj: dict) -> list[str]:
     return errors
 
 
+def detect_user_skill_level(answers: list[str], idea: str) -> str:
+    combined_text = " ".join((answers or []) + [idea or ""]).lower()
+    if any(k in combined_text for k in [
+        "beginner", "novice", "starter", "learning to code", "new to programming",
+        "just started", "zero experience", "no coding experience", "first time",
+        "first project", "non-technical", "newbie"
+    ]):
+        return "beginner"
+    if any(k in combined_text for k in [
+        "advanced", "senior", "expert", "experienced engineer", "years of experience"
+    ]):
+        return "advanced"
+    if any(k in combined_text for k in [
+        "intermediate", "some experience", "comfortable with", "familiar with", "mid-level"
+    ]):
+        return "intermediate"
+    return "intermediate"
+
+
+KNOWN_BEGINNER_RESOURCES = {
+    "react": {
+        "explanation": "React is a popular tool for building interactive user interfaces using reusable building blocks called components. In this project, it helps you build a clean, responsive front screen where changes update instantly without reloading the page. Because it is so widely used, you will find thousands of friendly beginner tutorials and answers online.",
+        "resource": {
+            "name": "Official React Interactive Tutorial (react.dev)",
+            "url": "https://react.dev/learn",
+            "description": "The official beginner guide with live interactive coding challenges right inside your browser.",
+        },
+    },
+    "next": {
+        "explanation": "Next.js is a full-stack framework built on top of React that handles both the web pages and server communication together. In this project, it makes your app load quickly and simplifies organizing your pages and API endpoints in one clean place. It handles heavy lifting like routing and page rendering automatically.",
+        "resource": {
+            "name": "Next.js Official Learn Course (nextjs.org/learn)",
+            "url": "https://nextjs.org/learn",
+            "description": "A step-by-step interactive course created by the Next.js team for building modern web apps from scratch.",
+        },
+    },
+    "vue": {
+        "explanation": "Vue is an approachable and friendly web framework for building user interfaces. In this project, it powers your dynamic views with clean, readable code that combines HTML, styling, and logic in one file. Many developers love it because it has one of the gentlest learning curves in modern programming.",
+        "resource": {
+            "name": "Vue.js Official Interactive Tutorial (vuejs.org/tutorial)",
+            "url": "https://vuejs.org/tutorial/",
+            "description": "An interactive tutorial directly in the official documentation guiding you through core concepts.",
+        },
+    },
+    "node": {
+        "explanation": "Node.js allows you to run JavaScript on your computer or server instead of only inside a web browser. In this project, it serves as the engine for your backend, listening for requests from your frontend and saving information to your database. It lets you use one familiar language across your entire project.",
+        "resource": {
+            "name": "freeCodeCamp Back End Development & APIs Certification",
+            "url": "https://www.freecodecamp.org/learn/back-end-development-and-apis/",
+            "description": "A completely free, accredited hands-on course covering Node.js and Express backend basics.",
+        },
+    },
+    "express": {
+        "explanation": "Express is a minimalist web server library for Node.js that helps you build API endpoints. In this project, it defines the digital doorways where your app sends and receives data like user accounts and project records. It keeps your server logic straightforward and easy to understand.",
+        "resource": {
+            "name": "MDN Web Docs: Express Web Framework Tutorial",
+            "url": "https://developer.mozilla.org/en-US/docs/Learn/Server-side/Express_Nodejs",
+            "description": "Mozilla's structured, beginner-accessible guide to building server applications with Express.",
+        },
+    },
+    "python": {
+        "explanation": "Python is famous for its clean, English-like syntax that makes it one of the easiest languages to learn and read. In this project, it coordinates your application's logic and data processing without overwhelming you with complex symbols. It is backed by a massive community and rich libraries.",
+        "resource": {
+            "name": "Python.org Official Beginner's Guide",
+            "url": "https://www.python.org/about/gettingstarted/",
+            "description": "The official starting portal for newcomers, linking to hands-on interactive tutorials and guides.",
+        },
+    },
+    "fastapi": {
+        "explanation": "FastAPI is a modern Python framework for creating web APIs quickly with minimal boilerplate. In this project, it receives incoming requests from your user interface and returns responses with built-in data validation. A huge beginner perk is that it automatically generates a visual web page where you can test your APIs by clicking buttons.",
+        "resource": {
+            "name": "Official FastAPI Tutorial - User Guide",
+            "url": "https://fastapi.tiangolo.com/tutorial/",
+            "description": "An exceptionally clear, step-by-step documentation tutorial with complete code examples.",
+        },
+    },
+    "flask": {
+        "explanation": "Flask is a lightweight Python web framework that gives you the essentials without dictating rigid rules. In this project, it runs your backend server and routes requests with minimal code. Because it is simple and unopinionated, you can easily understand every line of code you write.",
+        "resource": {
+            "name": "Flask Mega-Tutorial by Miguel Grinberg",
+            "url": "https://blog.miguelgrinberg.com/post/the-flask-mega-tutorial-part-i-hello-world",
+            "description": "The internet's most widely praised free tutorial for learning web development with Flask.",
+        },
+    },
+    "django": {
+        "explanation": "Django is a 'batteries-included' Python web framework that includes authentication, database management, and an admin panel out of the box. In this project, it saves you weeks of work by providing ready-to-use security and database features. It helps beginners build robust web applications safely.",
+        "resource": {
+            "name": "Official Django Girls Tutorial",
+            "url": "https://tutorial.djangogirls.org/",
+            "description": "A renowned, beginner-friendly walkthrough that takes you from zero to a live deployed web app.",
+        },
+    },
+    "postgresql": {
+        "explanation": "PostgreSQL is a powerful, reliable database that stores your information in neatly structured tables, like linked spreadsheets. In this project, it safeguards your user data and records with strict rules so nothing gets lost or corrupted. It is the gold standard database used by companies worldwide.",
+        "resource": {
+            "name": "PostgreSQL Tutorial for Beginners (postgresqltutorial.com)",
+            "url": "https://www.postgresqltutorial.com/",
+            "description": "A beginner-focused website offering plain-language explanations of SQL queries and table design.",
+        },
+    },
+    "sqlite": {
+        "explanation": "SQLite is a zero-configuration database that saves all your project data into a single simple file on your hard drive. In this project, it gives you full database capabilities without having to install, configure, or run a complex background server. It is the absolute easiest way for beginners to start with SQL.",
+        "resource": {
+            "name": "SQLite Tutorial (sqlitetutorial.net)",
+            "url": "https://www.sqlitetutorial.net/",
+            "description": "A beginner-friendly practical guide covering tables, inserts, queries, and joins.",
+        },
+    },
+    "mongodb": {
+        "explanation": "MongoDB is a database that stores data in flexible, document-like formats (similar to JSON) instead of rigid tables. In this project, it allows you to save and modify records quickly without having to run formal database migration steps. It is very intuitive if you are already comfortable with JavaScript objects.",
+        "resource": {
+            "name": "MongoDB University: Introduction to MongoDB",
+            "url": "https://learn.mongodb.com/",
+            "description": "Free, self-paced courses and video lessons directly from MongoDB's official education team.",
+        },
+    },
+    "prisma": {
+        "explanation": "Prisma is an Object-Relational Mapper (ORM) that lets you read and write database records using plain JavaScript/TypeScript instead of raw SQL queries. In this project, it prevents typos and gives you helpful code autocomplete inside your editor for every database column. It also includes Prisma Studio, a visual web browser for clicking and editing database rows.",
+        "resource": {
+            "name": "Prisma Getting Started Quickstart",
+            "url": "https://www.prisma.io/docs/getting-started",
+            "description": "A 5-minute interactive tutorial showing how to connect Prisma to a database and query data.",
+        },
+    },
+    "tailwind": {
+        "explanation": "Tailwind CSS is a utility-first styling tool that lets you design attractive web pages directly inside your HTML or React code. In this project, it styles buttons, cards, and layouts cleanly without having to write separate complicated CSS files. It includes curated colors and spacing out of the box so your app looks modern right away.",
+        "resource": {
+            "name": "Tailwind CSS Official Documentation & Screencasts",
+            "url": "https://tailwindcss.com/docs",
+            "description": "Interactive documentation with live preview examples and official short video tutorials.",
+        },
+    },
+    "typescript": {
+        "explanation": "TypeScript is JavaScript with added type definitions that act as a safety net while you code. In this project, your code editor will immediately underline mistakes, missing properties, and typos before you even run your application. It dramatically reduces common beginner bugs.",
+        "resource": {
+            "name": "TypeScript for the New Programmer (typescriptlang.org)",
+            "url": "https://www.typescriptlang.org/docs/handbook/typescript-from-scratch.html",
+            "description": "The official guide written specifically for people new to programming and types.",
+        },
+    },
+    "docker": {
+        "explanation": "Docker packages applications and databases into self-contained boxes called containers so they run identically on any computer. In this project, it lets you spin up a full local database instance with a single command without installing software directly onto your operating system. It eliminates 'it works on my machine' headaches.",
+        "resource": {
+            "name": "Docker 101 Tutorial & Interactive Desktop Guide",
+            "url": "https://www.docker.com/101-tutorial/",
+            "description": "A quick visual introduction to containers and how to run local services easily.",
+        },
+    },
+}
+
+
+def build_beginner_guide_items(stack: list[str], idea: str) -> list[dict]:
+    items = []
+    for tech_str in stack:
+        if not isinstance(tech_str, str) or not tech_str.strip():
+            continue
+        raw = tech_str.strip()
+        match = re.match(r"^([^(]+)(?:\s*\(([^)]+)\))?", raw)
+        name = match.group(1).strip() if match else raw
+        role = match.group(2).strip() if match and match.group(2) else ""
+        lower = name.lower()
+
+        matched = False
+        for key, info in KNOWN_BEGINNER_RESOURCES.items():
+            if key in lower:
+                items.append({
+                    "technology": raw,
+                    "explanation": info["explanation"],
+                    "learning_resource": info["resource"],
+                })
+                matched = True
+                break
+
+        if not matched:
+            items.append({
+                "technology": raw,
+                "explanation": (
+                    f"{name} is a widely adopted developer tool chosen for this project to handle "
+                    f"{role.lower() if role else 'core application functionality'}. "
+                    f"In this project, it gives you reliable building blocks so you don't have to build everything from scratch. "
+                    f"It has an approachable community with plenty of free beginner guides available."
+                ),
+                "learning_resource": {
+                    "name": f"Official {name} Documentation & Guides",
+                    "url": "https://developer.mozilla.org/en-US/docs/Learn",
+                    "description": f"Official documentation and introductory tutorials to help you understand {name} from the ground up.",
+                },
+            })
+    return items
+
+
 def call_groq_llm(messages: list[dict]) -> dict:
     if not LLM_API_KEY:
         logger.error("LLM_API_KEY is not configured.")
         raise HTTPException(status_code=500, detail="LLM_API_KEY is not configured")
 
-    try:
-        resp = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {LLM_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": LLM_MODEL,
-                "messages": messages,
-                "response_format": {"type": "json_object"},
-            },
-            timeout=45,
-        )
-    except requests.RequestException as e:
-        logger.error(f"Network error calling LLM API: {e}", exc_info=True)
-        raise HTTPException(status_code=502, detail=f"LLM API request failed: {str(e)}")
+    for attempt in range(3):
+        try:
+            resp = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {LLM_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": LLM_MODEL,
+                    "messages": messages,
+                    "response_format": {"type": "json_object"},
+                },
+                timeout=45,
+            )
+        except requests.RequestException as e:
+            logger.error(f"Network error calling LLM API: {e}", exc_info=True)
+            raise HTTPException(status_code=502, detail=f"LLM API request failed: {str(e)}")
 
-    if resp.status_code != 200:
-        logger.error(f"LLM API returned status {resp.status_code}: {resp.text}")
-        raise HTTPException(
-            status_code=resp.status_code,
-            detail=f"Groq API error: {resp.text}",
-        )
+        if resp.status_code == 429:
+            logger.warning(f"Groq API 429 rate limit hit on attempt {attempt+1}. Backing off...")
+            if attempt < 2:
+                time.sleep(12)
+                continue
+            else:
+                raise HTTPException(
+                    status_code=429,
+                    detail="LLM API rate limit exceeded. Please wait a few seconds and try again.",
+                )
 
-    try:
-        data = resp.json()
-        raw_content = data["choices"][0]["message"]["content"].strip()
-        if raw_content.startswith("```"):
-            raw_content = raw_content.strip("`")
-            if raw_content.startswith("json"):
-                raw_content = raw_content[4:].strip()
-        return json.loads(raw_content)
-    except (KeyError, IndexError, json.JSONDecodeError) as err:
-        logger.error(f"Malformed JSON returned by model: {err}. Raw response was: {resp.text}", exc_info=True)
-        raise ValueError(f"Malformed JSON returned by model: {err}")
+        if resp.status_code != 200:
+            logger.error(f"LLM API returned status {resp.status_code}: {resp.text}")
+            raise HTTPException(
+                status_code=resp.status_code,
+                detail=f"Groq API error: {resp.text}",
+            )
+
+        try:
+            data = resp.json()
+            raw_content = data["choices"][0]["message"]["content"].strip()
+            if raw_content.startswith("```"):
+                raw_content = raw_content.strip("`")
+                if raw_content.startswith("json"):
+                    raw_content = raw_content[4:].strip()
+            return json.loads(raw_content)
+        except (KeyError, IndexError, json.JSONDecodeError) as err:
+            logger.error(f"Malformed JSON returned by model: {err}. Raw response was: {resp.text}", exc_info=True)
+            raise ValueError(f"Malformed JSON returned by model: {err}")
 
 
-def generate_roadmap_with_validation(messages: list[dict]) -> dict:
+def generate_roadmap_with_validation(messages: list[dict], user_skill_level: str = None, idea: str = "") -> dict:
     attempt_messages = list(messages)
     max_retries = 1
 
@@ -442,6 +683,27 @@ def generate_roadmap_with_validation(messages: list[dict]) -> dict:
             parsed = None
 
         if not errors and parsed:
+            inner_data = parsed.get("data") if isinstance(parsed.get("data"), dict) else parsed
+            target_skill = user_skill_level or inner_data.get("user_skill_level")
+            if not target_skill and inner_data.get("feasibility") == "beginner":
+                target_skill = "beginner"
+
+            if target_skill == "beginner":
+                inner_data["user_skill_level"] = "beginner"
+                existing_guide = inner_data.get("beginner_guide")
+                valid_guide = []
+                if isinstance(existing_guide, list):
+                    for item in existing_guide:
+                        if isinstance(item, dict) and item.get("technology"):
+                            valid_guide.append(item)
+                if not valid_guide:
+                    valid_guide = build_beginner_guide_items(
+                        inner_data.get("recommended_stack", []),
+                        idea
+                    )
+                inner_data["beginner_guide"] = valid_guide
+            elif target_skill:
+                inner_data["user_skill_level"] = target_skill
             return parsed
 
         if attempt < max_retries:
@@ -1116,6 +1378,283 @@ def compare_ideas(
         )
 
 
+def supplement_viva_questions(existing: list[dict], idea: str, data: dict) -> list[dict]:
+    results = list(existing)
+    existing_q_texts = {q.get("question", "").lower() for q in results}
+    
+    stack = data.get("recommended_stack", [])
+    stack_text = ", ".join(str(s) for s in stack) if isinstance(stack, list) else str(stack)
+    schema = data.get("suggested_schema", []) or []
+    table_names = [t.get("table_name") for t in schema if isinstance(t, dict) and t.get("table_name")]
+    primary_table = table_names[0] if table_names else "primary data records"
+
+    fallback_bank = [
+        {
+            "category": "Architecture & System Design",
+            "question": f"How is the overall architecture decoupled between the client and server for this {idea[:40]} application?",
+            "model_answer": "The application follows a decoupled client-server architecture. The frontend handles presentation, routing, and user interaction, communicating with the backend exclusively via stateless RESTful JSON APIs. This guarantees clear separation of concerns, independent deployability, and simplified horizontal scaling.",
+            "viva_tip": "Highlight the statelessness of the REST endpoints and why decoupling allows changing the frontend framework without rewriting backend business logic.",
+        },
+        {
+            "category": "Tech Stack & Framework Choices",
+            "question": f"What were the technical trade-offs in choosing {stack_text or 'the chosen stack'} instead of alternative frameworks?",
+            "model_answer": f"The selected stack ({stack_text or 'the chosen stack'}) was chosen for its mature ecosystem, strong developer velocity, active community support, and robust tooling. Compared to heavier alternatives, it minimizes runtime boilerplate while offering optimal performance for asynchronous I/O and relational data integrity.",
+            "viva_tip": "Emphasize specific ecosystem advantages like package availability, type safety, and standard community patterns.",
+        },
+        {
+            "category": "Database Design & Data Modeling",
+            "question": f"Explain the database normalization level and relationship design for the '{primary_table}' table.",
+            "model_answer": f"The database schema is designed adhering to Third Normal Form (3NF) to prevent redundant data storage, insertion anomalies, and update discrepancies. Foreign keys maintain strict referential integrity, while foreign key indices prevent table scan bottlenecks during join operations.",
+            "viva_tip": "Walk the examiner through the primary key and foreign key relationships and describe what happens during cascade deletes.",
+        },
+        {
+            "category": "Database Design & Data Modeling",
+            "question": "How do you mitigate the N+1 query problem when fetching relational entity data?",
+            "model_answer": "The N+1 problem occurs when querying parent records executes 1 query and fetching child relations executes N additional queries. We mitigate this using eager loading (`JOIN FETCH` or ORM `include`/`select_related`) or batched subquery loading, ensuring all related records are fetched in a single efficient query.",
+            "viva_tip": "Clearly contrast lazy loading with eager loading and explain how execution plan analysis (EXPLAIN ANALYZE) identifies this.",
+        },
+        {
+            "category": "Security & Implementation",
+            "question": "How is authentication state and session persistence secured against XSS and CSRF attacks?",
+            "model_answer": "Authentication uses signed JWT tokens with short expiration lifetimes. Sensitive tokens should be stored in HTTP-only, Secure, SameSite cookies to protect against Cross-Site Scripting (XSS). Additionally, CSRF protection tokens and strict CORS policies safeguard against cross-origin unauthorized state-changing requests.",
+            "viva_tip": "Mention why storing tokens in localStorage is vulnerable to XSS and why HTTP-only cookies offer superior defense in depth.",
+        },
+        {
+            "category": "Security & Implementation",
+            "question": "How does the backend validate incoming user payloads and prevent SQL or NoSQL injection?",
+            "model_answer": "Input payloads undergo strict schema-based validation and sanitization using Pydantic / validation schemas before business processing. All database queries utilize parameterized queries and ORM abstractions, ensuring user input is never directly concatenated into raw SQL strings.",
+            "viva_tip": "Emphasize parameterized queries as the gold standard against SQL injection over naive regex escaping.",
+        },
+        {
+            "category": "Architecture & System Design",
+            "question": "How would you handle asynchronous background processing and rate limiting under peak user traffic?",
+            "model_answer": "Time-consuming operations (such as emails, notifications, and scheduled reports) are offloaded to asynchronous task queues (e.g. Celery, BullMQ, or worker threads) backed by a Redis broker. API endpoints implement sliding-window rate limiting to prevent denial-of-service abuse.",
+            "viva_tip": "Explain that long-running operations in the HTTP request-response cycle block worker threads, degrading server throughput.",
+        },
+        {
+            "category": "Architecture & System Design",
+            "question": "What caching strategies would you apply to optimize response latency as the dataset grows?",
+            "model_answer": "We utilize in-memory key-value caching (like Redis) for read-heavy, infrequently changing queries using a Cache-Aside pattern with TTL expiration. Client-side HTTP caching headers (Cache-Control, ETag) also reduce redundant bandwidth consumption.",
+            "viva_tip": "Mention the classic dilemma of cache invalidation and how TTLs combined with explicit invalidation upon mutation maintain consistency.",
+        },
+        {
+            "category": "Tech Stack & Framework Choices",
+            "question": "Why is client-side state management separated from server-state management?",
+            "model_answer": "Client-side state (UI toggles, modal visibility, active filters) is ephemeral and synchronous, whereas server state is asynchronous, cached, and owned remotely. Separating them avoids synchronization desyncs and simplifies caching and error rollback.",
+            "viva_tip": "Cite tools like React Query, SWR, or RTK Query as modern examples of dedicated server-state management.",
+        },
+        {
+            "category": "Security & Implementation",
+            "question": "What is your strategy for database migrations and schema evolution in production without downtime?",
+            "model_answer": "Database migrations follow the Expand and Contract pattern with toolsets like Alembic or Prisma Migrate. Backward-compatible changes (e.g. adding nullable columns) are deployed first, code is transitioned to write to both old and new columns, and obsolete columns are deprecated and removed in subsequent phases.",
+            "viva_tip": "Point out that running breaking DDL migrations during deployment locks tables and can crash active backend processes.",
+        },
+        {
+            "category": "Architecture & System Design",
+            "question": "How do you handle unhandled exceptions and client-side error boundaries gracefully?",
+            "model_answer": "On the backend, global exception middleware catches unhandled errors, logs detailed stack traces with correlation IDs to application monitoring, and returns sanitized, friendly JSON error responses. The frontend wraps component subtrees with React Error Boundaries to prevent full-screen crashes.",
+            "viva_tip": "Highlight that internal server stack traces should never leak to external users in production responses for security reasons.",
+        },
+        {
+            "category": "Tech Stack & Framework Choices",
+            "question": "What automated testing pyramid strategy would best validate this project before shipping?",
+            "model_answer": "A healthy testing pyramid comprises fast unit tests for utility and business functions, integration tests for API endpoints verifying database transactions with test containers, and a concise suite of end-to-end tests for critical user user journeys.",
+            "viva_tip": "Explain why unit tests are fast and cheap while end-to-end tests provide high confidence but are slower to run in CI/CD.",
+        },
+    ]
+
+    for item in fallback_bank:
+        if len(results) >= 14:
+            break
+        if item["question"].lower() not in existing_q_texts:
+            item_copy = dict(item)
+            item_copy["id"] = len(results) + 1
+            results.append(item_copy)
+            existing_q_texts.add(item["question"].lower())
+
+    return results
+
+
+def build_viva_questions_with_llm(idea: str, data: dict) -> list[dict]:
+    clean_idea = (idea or "").strip()
+    feasibility = data.get("feasibility", "intermediate")
+    weeks = data.get("estimated_weeks", 4)
+    stack_list = data.get("recommended_stack", [])
+    if isinstance(stack_list, list):
+        stack_str = ", ".join(str(s) for s in stack_list)
+    else:
+        stack_str = str(stack_list)
+
+    schema_summary = []
+    suggested_schema = data.get("suggested_schema", []) or []
+    if isinstance(suggested_schema, list):
+        for table in suggested_schema:
+            if isinstance(table, dict):
+                t_name = table.get("table_name", "unnamed_table")
+                fields = table.get("fields", [])
+                field_names = [f.get("name") for f in fields if isinstance(f, dict) and f.get("name")]
+                schema_summary.append(f"{t_name} ({', '.join(field_names)})")
+    schema_str = "; ".join(schema_summary) or "Standard relational tables"
+
+    mvp_features = data.get("mvp_features", []) or []
+    mvp_str = "\n- ".join(str(f) for f in mvp_features) if isinstance(mvp_features, list) else str(mvp_features)
+
+    stretch_features = data.get("stretch_features", []) or []
+    stretch_str = "\n- ".join(str(f) for f in stretch_features) if isinstance(stretch_features, list) else str(stretch_features)
+
+    pitfalls = data.get("potential_pitfalls", []) or []
+    pitfalls_str = "\n- ".join(str(p) for p in pitfalls) if isinstance(pitfalls, list) else str(pitfalls)
+
+    system_prompt = (
+        "You are an expert academic examiner, university professor, and principal software architect.\n"
+        "Your task is to generate 10 to 15 rigorous, comprehensive, project-specific viva voce questions and technical interview questions that an examiner would ask about this exact project.\n"
+        "Questions must directly reference the user's specific project domain, recommended tech stack, database schema tables, architecture, and feature requirements.\n\n"
+        "You must cover all 4 of the following technical domains:\n"
+        "1. Architecture & System Design (e.g. client-server separation, API contract, scalability, state flow, caching)\n"
+        "2. Tech Stack & Framework Choices (e.g. justification for selected libraries/frameworks over alternatives, trade-offs, language features)\n"
+        "3. Database Design & Data Modeling (e.g. normalization level, entity relationships, foreign key constraints, indexes, query bottlenecks based on the schema)\n"
+        "4. Security, Edge Cases & Implementation (e.g. auth security, token management, sanitization, handling concurrency, error boundaries, failure recovery)\n\n"
+        "Respond ONLY with a valid JSON object matching this exact schema:\n"
+        "{\n"
+        '  "questions": [\n'
+        "    {\n"
+        '      "id": 1,\n'
+        '      "category": "Architecture & System Design",\n'
+        '      "question": "<detailed project-specific question>",\n'
+        '      "model_answer": "<thorough, articulate technical answer demonstrating deep understanding in 3-5 sentences>",\n'
+        '      "viva_tip": "<practical tip on what examiners look for and how to confidently explain this in oral defense>"\n'
+        "    }\n"
+        "  ]\n"
+        "}"
+    )
+
+    user_prompt = (
+        f"Project Idea: {clean_idea}\n"
+        f"Complexity: {feasibility} ({weeks} weeks estimated)\n"
+        f"Recommended Tech Stack: {stack_str}\n"
+        f"Database Schema Entities: {schema_str}\n\n"
+        f"Core MVP Features:\n- {mvp_str}\n\n"
+        f"Stretch Features:\n- {stretch_str}\n\n"
+        f"Potential Pitfalls & Edge Cases:\n- {pitfalls_str}\n\n"
+        "Please generate 10 to 15 high-quality, project-specific viva voce questions with model answers and defense tips."
+    )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    cleaned_questions = []
+    try:
+        llm_resp = call_groq_llm(messages)
+        questions_raw = (
+            llm_resp.get("questions")
+            or llm_resp.get("viva_questions")
+            or (llm_resp if isinstance(llm_resp, list) else None)
+        )
+
+        if isinstance(questions_raw, list):
+            for idx, item in enumerate(questions_raw, 1):
+                if isinstance(item, dict) and item.get("question"):
+                    cleaned_questions.append({
+                        "id": item.get("id", idx),
+                        "category": str(item.get("category", "Architecture & System Design")),
+                        "question": str(item.get("question", "")).strip(),
+                        "model_answer": str(item.get("model_answer", item.get("answer", ""))).strip(),
+                        "viva_tip": str(item.get("viva_tip", item.get("tip", ""))).strip(),
+                    })
+    except Exception as llm_err:
+        logger.warning(f"Groq viva generation encountered issue: {llm_err}. Using supplement generator.")
+
+    if len(cleaned_questions) >= 10:
+        return cleaned_questions
+
+    return supplement_viva_questions(cleaned_questions, clean_idea, data)
+
+
+@app.post("/roadmaps/viva")
+def generate_viva_questions_endpoint(
+    req: VivaRequest,
+    db: Session = Depends(get_db),
+    current_user: Optional[models.User] = Depends(get_optional_current_user),
+):
+    roadmap_data = None
+    idea = (req.idea or "").strip()
+
+    if req.roadmap_id:
+        query = db.query(models.Roadmap).filter(models.Roadmap.id == req.roadmap_id)
+        if current_user:
+            query = query.filter(models.Roadmap.user_id == current_user.id)
+        record = query.first()
+        if record:
+            data_val = record.data or {}
+            roadmap_data = data_val.get("data", data_val) if isinstance(data_val, dict) else {}
+            if not idea:
+                idea = record.original_idea or ""
+
+    if not roadmap_data and req.roadmap_data:
+        data_val = req.roadmap_data
+        roadmap_data = data_val.get("data", data_val) if isinstance(data_val, dict) else data_val
+
+    if not roadmap_data:
+        raise HTTPException(status_code=400, detail="Missing roadmap data or valid roadmap_id")
+
+    try:
+        questions = build_viva_questions_with_llm(idea, roadmap_data)
+        return {
+            "idea": idea,
+            "count": len(questions),
+            "questions": questions,
+        }
+    except Exception as exc:
+        logger.error(f"Error generating viva questions: {exc}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": True,
+                "detail": str(exc),
+                "message": "Failed to generate viva questions with AI. Please try again.",
+            },
+        )
+
+
+@app.post("/roadmaps/{roadmap_id}/viva")
+def generate_viva_questions_by_id_endpoint(
+    roadmap_id: int,
+    db: Session = Depends(get_db),
+    current_user: Optional[models.User] = Depends(get_optional_current_user),
+):
+    query = db.query(models.Roadmap).filter(models.Roadmap.id == roadmap_id)
+    if current_user:
+        query = query.filter(models.Roadmap.user_id == current_user.id)
+    record = query.first()
+    if not record:
+        raise HTTPException(status_code=404, detail=f"Roadmap with id {roadmap_id} not found")
+
+    data_val = record.data or {}
+    roadmap_data = data_val.get("data", data_val) if isinstance(data_val, dict) else {}
+    idea = record.original_idea or ""
+
+    try:
+        questions = build_viva_questions_with_llm(idea, roadmap_data)
+        return {
+            "roadmap_id": roadmap_id,
+            "idea": idea,
+            "count": len(questions),
+            "questions": questions,
+        }
+    except Exception as exc:
+        logger.error(f"Error generating viva questions for roadmap {roadmap_id}: {exc}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": True,
+                "detail": str(exc),
+                "message": "Failed to generate viva questions with AI. Please try again.",
+            },
+        )
+
+
 @app.post("/plan")
 def generate_plan(
     request: IdeaRequest,
@@ -1136,13 +1675,15 @@ def generate_plan(
             "just generate" in ans.lower() for ans in previous_answers
         )
 
+        detected_skill = detect_user_skill_level(previous_answers, request.idea)
+
         if is_roadmap_stage:
             user_content += "\nYou have reached the required questions or user requested generation. Generate the final project roadmap JSON now."
             messages = [
                 {"role": "system", "content": ROADMAP_SYSTEM_PROMPT},
                 {"role": "user", "content": user_content},
             ]
-            roadmap_response = generate_roadmap_with_validation(messages)
+            roadmap_response = generate_roadmap_with_validation(messages, user_skill_level=detected_skill, idea=request.idea)
             try:
                 user_id_val = current_user.id if isinstance(current_user, models.User) else getattr(current_user, "id", None)
                 roadmap_record = models.Roadmap(
@@ -1154,11 +1695,14 @@ def generate_plan(
                 db.commit()
                 db.refresh(roadmap_record)
                 roadmap_response["id"] = roadmap_record.id
+                roadmap_response["original_idea"] = request.idea
                 if isinstance(roadmap_response.get("data"), dict):
                     roadmap_response["data"]["id"] = roadmap_record.id
+                    roadmap_response["data"]["original_idea"] = request.idea
             except Exception as db_err:
                 logger.error(f"Database save error in roadmap stage: {db_err}", exc_info=True)
                 db.rollback()
+            roadmap_response["original_idea"] = request.idea
             return roadmap_response
         else:
             messages = [
@@ -1169,7 +1713,28 @@ def generate_plan(
             if response.get("type") == "roadmap":
                 errors = validate_roadmap_schema(response)
                 if errors:
-                    response = generate_roadmap_with_validation(messages)
+                    response = generate_roadmap_with_validation(messages, user_skill_level=detected_skill, idea=request.idea)
+                else:
+                    inner_data = response.get("data") if isinstance(response.get("data"), dict) else response
+                    target_skill = detected_skill or inner_data.get("user_skill_level")
+                    if not target_skill and inner_data.get("feasibility") == "beginner":
+                        target_skill = "beginner"
+                    if target_skill == "beginner":
+                        inner_data["user_skill_level"] = "beginner"
+                        existing_guide = inner_data.get("beginner_guide")
+                        valid_guide = []
+                        if isinstance(existing_guide, list):
+                            for item in existing_guide:
+                                if isinstance(item, dict) and item.get("technology"):
+                                    valid_guide.append(item)
+                        if not valid_guide:
+                            valid_guide = build_beginner_guide_items(
+                                inner_data.get("recommended_stack", []),
+                                request.idea
+                            )
+                        inner_data["beginner_guide"] = valid_guide
+                    elif target_skill:
+                        inner_data["user_skill_level"] = target_skill
                 try:
                     user_id_val = current_user.id if isinstance(current_user, models.User) else getattr(current_user, "id", None)
                     roadmap_record = models.Roadmap(
@@ -1181,11 +1746,14 @@ def generate_plan(
                     db.commit()
                     db.refresh(roadmap_record)
                     response["id"] = roadmap_record.id
+                    response["original_idea"] = request.idea
                     if isinstance(response.get("data"), dict):
                         response["data"]["id"] = roadmap_record.id
+                        response["data"]["original_idea"] = request.idea
                 except Exception as db_err:
                     logger.error(f"Database save error in question stage: {db_err}", exc_info=True)
                     db.rollback()
+                response["original_idea"] = request.idea
             return response
     except HTTPException as he:
         logger.error(f"HTTP error in /plan endpoint ({he.status_code}): {he.detail}", exc_info=True)

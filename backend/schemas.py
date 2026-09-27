@@ -34,3 +34,10 @@ class UserAuthRequest(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+
+class VivaRequest(BaseModel):
+    idea: Optional[str] = ""
+    roadmap_data: Optional[dict] = None
+    roadmap_id: Optional[int] = None
+

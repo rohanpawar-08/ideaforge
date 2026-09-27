@@ -1,0 +1,255 @@
+{
+  "type": "roadmap",
+  "data": {
+    "feasibility": "intermediate",
+    "difficulty_breakdown": {
+      "frontend_complexity": "intermediate",
+      "backend_complexity": "intermediate",
+      "database_complexity": "intermediate",
+      "ai_complexity": "intermediate",
+      "deployment_complexity": "intermediate"
+    },
+    "estimated_weeks": 12,
+    "recommended_stack": [
+      "Next.js (React)",
+      "Node.js with TypeScript"
+    ],
+    "setup_guide": {
+      "primary_language": "TypeScript, for type safety and better developer experience",
+      "editor_recommendation": "VS Code, because it offers excellent TypeScript support and a rich ecosystem of extensions for React and Next.js",
+      "key_tools": [
+        {
+          "name": "Prisma",
+          "purpose": "ORM to interact with PostgreSQL and manage database migrations"
+        },
+        {
+          "name": "Zod",
+          "purpose": "Schema validation for API requests and form inputs"
+        }
+      ],
+      "getting_started_command": "npx create-next-app@latest smart-meal-planner --ts"
+    },
+    "suggested_schema": [
+      {
+        "table_name": "users",
+        "fields": [
+          {
+            "name": "id",
+            "type": "string",
+            "notes": "primary key, UUID"
+          },
+          {
+            "name": "email",
+            "type": "string",
+            "notes": "unique"
+          },
+          {
+            "name": "password_hash",
+            "type": "string",
+            "notes": "hashed password"
+          },
+          {
+            "name": "created_at",
+            "type": "timestamp",
+            "notes": "timestamp of account creation"
+          }
+        ]
+      },
+      {
+        "table_name": "recipes",
+        "fields": [
+          {
+            "name": "id",
+            "type": "string",
+            "notes": "primary key, UUID"
+          },
+          {
+            "name": "user_id",
+            "type": "string",
+            "notes": "foreign key to users"
+          },
+          {
+            "name": "name",
+            "type": "string",
+            "notes": "recipe name"
+          },
+          {
+            "name": "ingredients",
+            "type": "json",
+            "notes": "list of ingredient objects"
+          },
+          {
+            "name": "instructions",
+            "type": "text",
+            "notes": "preparation steps"
+          },
+          {
+            "name": "prep_time_minutes",
+            "type": "integer",
+            "notes": "estimated prep time"
+          }
+        ]
+      },
+      {
+        "table_name": "meal_plans",
+        "fields": [
+          {
+            "name": "id",
+            "type": "string",
+            "notes": "primary key, UUID"
+          },
+          {
+            "name": "user_id",
+            "type": "string",
+            "notes": "foreign key to users"
+          },
+          {
+            "name": "start_date",
+            "type": "date",
+            "notes": "week start"
+          },
+          {
+            "name": "end_date",
+            "type": "date",
+            "notes": "week end"
+          }
+        ]
+      },
+      {
+        "table_name": "meal_plan_items",
+        "fields": [
+          {
+            "name": "id",
+            "type": "string",
+            "notes": "primary key, UUID"
+          },
+          {
+            "name": "meal_plan_id",
+            "type": "string",
+            "notes": "foreign key to meal_plans"
+          },
+          {
+            "name": "day_of_week",
+            "type": "string",
+            "notes": "e.g. Monday"
+          },
+          {
+            "name": "meal_time",
+            "type": "string",
+            "notes": "breakfast, lunch, dinner"
+          },
+          {
+            "name": "recipe_id",
+            "type": "string",
+            "notes": "foreign key to recipes"
+          }
+        ]
+      },
+      {
+        "table_name": "grocery_lists",
+        "fields": [
+          {
+            "name": "id",
+            "type": "string",
+            "notes": "primary key, UUID"
+          },
+          {
+            "name": "user_id",
+            "type": "string",
+            "notes": "foreign key to users"
+          },
+          {
+            "name": "created_at",
+            "type": "timestamp",
+            "notes": "when list was generated"
+          }
+        ]
+      },
+      {
+        "table_name": "grocery_items",
+        "fields": [
+          {
+            "name": "id",
+            "type": "string",
+            "notes": "primary key, UUID"
+          },
+          {
+            "name": "grocery_list_id",
+            "type": "string",
+            "notes": "foreign key to grocery_lists"
+          },
+          {
+            "name": "name",
+            "type": "string",
+            "notes": "item name"
+          },
+          {
+            "name": "quantity",
+            "type": "integer",
+            "notes": "amount needed"
+          },
+          {
+            "name": "price_per_unit",
+            "type": "decimal",
+            "notes": "unit cost"
+          },
+          {
+            "name": "total_cost",
+            "type": "decimal",
+            "notes": "price_per_unit * quantity"
+          }
+        ]
+      }
+    ],
+    "mvp_features": [
+      "Automated weekly meal planning based on preferences",
+      "Grocery cost optimization and shopping list generation",
+      "Budget tracking with expense visualization"
+    ],
+    "stretch_features": [
+      "AI-powered recipe recommendation based on pantry items",
+      "Voice-controlled meal planning",
+      "Integration with grocery delivery services"
+    ],
+    "milestones": [
+      {
+        "week": 1,
+        "goal": "Project skeleton and environment setup",
+        "tasks": [
+          "Initialize Next.js project with TypeScript",
+          "Set up GitHub repo and CI workflow",
+          "Configure Prisma with PostgreSQL locally"
+        ]
+      },
+      {
+        "week": 2,
+        "goal": "User authentication and basic models",
+        "tasks": [
+          "Implement JWT-based auth",
+          "Create users table and migration",
+          "Add sign-up and login API routes"
+        ]
+      },
+      {
+        "week": 3,
+        "goal": "Recipe CRUD and meal plan creation",
+        "tasks": [
+          "Build recipe create/edit/delete pages",
+          "Implement meal plan creation UI",
+          "Store meal_plan_items linking recipes"
+        ]
+      },
+      {
+        "week": 4,
+        "goal": "Grocery list generation and budgeting",
+        "tasks": [
+          "Calculate grocery items from meal plans",
+          "Generate grocery lists with cost totals",
+          "Show budget overview on dashboard"
+        ]
+      }
+    ],
+    "id": 2
+  },
+  "id": 2
+}

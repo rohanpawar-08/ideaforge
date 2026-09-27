@@ -1,0 +1,90 @@
+{
+  "idea": "A smart meal planner and grocery budgeting app that creates weekly meal plans based on dietary preferences, tracks grocery expenses, and generates optimized shopping lists.",
+  "count": 12,
+  "questions": [
+    {
+      "id": 1,
+      "category": "Architecture & System Design",
+      "question": "How would you structure the client\u2011server interaction for the meal planner, ensuring real\u2011time updates to the shopping list while keeping the API stateless?",
+      "model_answer": "I would expose REST endpoints for CRUD operations on meal_plans, meal_plan_items, and grocery_lists, and use Server\u2011Sent Events or a WebSocket channel for push notifications when a plan changes. The client would maintain local state via a state manager (e.g., React\u2011Query) and optimistically update the UI. The server stays stateless by keeping all session info in JWTs and caching frequent data in Redis for low latency.",
+      "viva_tip": "Examine the trade\u2011off between WebSocket complexity and client\u2011side polling; highlight how statelessness simplifies scaling."
+    },
+    {
+      "id": 2,
+      "category": "Architecture & System Design",
+      "question": "Describe a caching strategy you would use to reduce database load when generating grocery lists for users with many recipes. Which cache keys would you define?",
+      "model_answer": "I would cache recipe ingredient lists per recipe_id and also a pre\u2011computed aggregated list per user for a given date range. Cache keys could be \"recipe:{id}:ingredients\" and \"user:{id}:mealplan:{start_date}:grocerylist\". Eviction policies: LRU for recipe cache; TTL of 24h for grocery list cache, invalidated on recipe update events.",
+      "viva_tip": "Show awareness of cache coherency issues and how to tie cache invalidation to database triggers or event bus."
+    },
+    {
+      "id": 3,
+      "category": "Architecture & System Design",
+      "question": "Explain how you would implement a multi\u2011tenant architecture for the app to support future corporate clients while reusing the same database schema.",
+      "model_answer": "I would add a tenant_id column to each table (users, recipes, etc.) and enforce row\u2011level security via PostgreSQL policies. All queries would be prefixed with the tenant_id. For further isolation, I might spin up separate schemas per tenant and use a tenant\u2011routing middleware to select the schema at runtime.",
+      "viva_tip": "Discuss trade\u2011offs between shared\u2011database vs. schema isolation and how to balance cost vs. security."
+    },
+    {
+      "id": 4,
+      "category": "Tech Stack & Framework Choices",
+      "question": "Why did you choose Next.js over a SPA framework like Create\u2011React\u2011App for this app?",
+      "model_answer": "Next.js provides server\u2011side rendering, which improves SEO for recipe pages and gives instant page loads for users. It also offers file\u2011based routing and API routes, allowing us to consolidate backend logic within the same repo. These benefits outweigh the extra build complexity for an app that benefits from fast initial renders.",
+      "viva_tip": "Mention performance metrics and SEO considerations; be ready to discuss alternative SSR frameworks if asked."
+    },
+    {
+      "id": 5,
+      "category": "Tech Stack & Framework Choices",
+      "question": "What advantages does TypeScript bring to your Node.js backend, especially in the context of a complex schema like ours?",
+      "model_answer": "TypeScript enforces compile\u2011time type safety on entities such as User, Recipe, and GroceryItem, catching mismatches between the database shape and API contracts early. It improves IDE autocomplete, reduces runtime errors, and makes refactoring safer when adding features like AI recommendations. The type system also aids in generating OpenAPI specs automatically.",
+      "viva_tip": "Show specific examples where a missing type caught a bug in a recent refactor; this demonstrates real value."
+    },
+    {
+      "id": 6,
+      "category": "Tech Stack & Framework Choices",
+      "question": "Which ORM or query builder did you select for the TypeScript backend and why?",
+      "model_answer": "I chose Prisma because it offers a type\u2011safe, auto\u2011generated client that maps directly to the PostgreSQL schema, supports nested writes for meal_plan_items, and integrates well with migrations. Compared to Sequelize, Prisma has lower boilerplate and better TypeScript support, while avoiding raw SQL pitfalls that could lead to injection vulnerabilities.",
+      "viva_tip": "Be prepared to explain how Prisma\u2019s query language differs from raw SQL and discuss how migrations are handled in CI."
+    },
+    {
+      "id": 7,
+      "category": "Database Design & Data Modeling",
+      "question": "Explain the normalization level of the recipes table and why you store ingredients as a JSON field rather than a separate table.",
+      "model_answer": "The recipes table is 3NF for core columns, but ingredients are stored as JSON to simplify the schema and enable rapid prototyping; each recipe\u2019s ingredient list is self\u2011contained. A separate ingredients table would add joins and complexity when recipes are read frequently. We mitigate this by indexing the JSON field for common queries like \"find recipes containing almond\" using a GIN index on ingredients.*",
+      "viva_tip": "Highlight the trade\u2011off between normalized joins vs. denormalized JSON, and mention potential future migration plans."
+    },
+    {
+      "id": 8,
+      "category": "Database Design & Data Modeling",
+      "question": "Which indexes would you create on the grocery_items table to optimize cost\u2011aggregation queries?",
+      "model_answer": "I would add a composite index on (grocery_list_id, name) for fast lookup of items when merging lists, and a separate index on price_per_unit for sorting by cost. Additionally, a partial index on (total_cost) where price_per_unit IS NOT NULL helps aggregate budget totals. All indexes use B\u2011Tree for equality and range queries, while a GIN index on name supports full\u2011text search.*",
+      "viva_tip": "Discuss how index choices impact write latency; show an example of an EXPLAIN ANALYZE output."
+    },
+    {
+      "id": 9,
+      "category": "Security, Edge Cases & Implementation",
+      "question": "How does your authentication flow protect against token theft, and what is your strategy for token refresh?",
+      "model_answer": "We use short\u2011lived JWT access tokens signed with RSA-256 and store them in HttpOnly, Secure cookies to mitigate XSS. Refresh tokens are stored in a separate cookie with a longer expiry and are rotated on each use. If a refresh token is used twice, it is immediately invalidated via a blacklist table, preventing replay attacks.",
+      "viva_tip": "Explain the threat model (XSS, CSRF) and how cookie attributes mitigate each; be ready to discuss token revocation strategy."
+    },
+    {
+      "id": 10,
+      "category": "Security, Edge Cases & Implementation",
+      "question": "Describe how you would handle concurrent updates to a meal_plan when two clients edit the same item simultaneously.",
+      "model_answer": "I would implement optimistic concurrency control using a version column (e.g., updated_at timestamp) on meal_plan_items. Each update includes the original timestamp; if a mismatch is detected, the server rejects the operation with a 409 Conflict. The client then refetches the latest state and prompts the user to reconcile changes.",
+      "viva_tip": "Mention the use of HTTP status codes and how the UI communicates merge conflicts."
+    },
+    {
+      "id": 11,
+      "category": "Security, Edge Cases & Implementation",
+      "question": "What sanitization or validation steps are you taking before inserting ingredient data received from user\u2011submitted recipes?",
+      "model_answer": "Incoming recipe payloads are validated against a JSON Schema that enforces required fields and data types. The ingredients JSON array is parsed, each ingredient is stripped of HTML tags using DOMPurify, and we escape any strings before storing. We also enforce a length limit per ingredient to avoid injection via oversized inputs.",
+      "viva_tip": "Show the schema snippet and explain how server\u2011side validation complements client\u2011side checks."
+    },
+    {
+      "id": 12,
+      "category": "Security, Edge Cases & Implementation",
+      "question": "In the event of a database outage, how does your system ensure data consistency for a user\u2019s grocery list?",
+      "model_answer": "We use PostgreSQL transactions with the REPEATABLE READ isolation level for critical writes. A retryable retry middleware attempts up to three retries with exponential backoff. Additionally, we stream grocery lists to a write\u2011through cache (Redis) and replay them on reconnection, ensuring that no user action is lost during a brief outage.",
+      "viva_tip": "Highlight the importance of idempotent API endpoints and how you test outage scenarios in CI."
+    }
+  ]
+}
