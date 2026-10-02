@@ -1,3 +1,4 @@
+import ipaddress
 import json
 import logging
 import os
@@ -13,6 +14,9 @@ from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
@@ -38,9 +42,38 @@ logger = logging.getLogger("ideaforge")
 
 load_dotenv()
 
-SECRET_KEY = os.getenv("SECRET_KEY", "ideaforge_jwt_super_secret_key_2026_x99a8b7c6d5e4f3a2b1c")
+SECRET_KEY = os.getenv("SECRET_KEY", "").strip()
+if not SECRET_KEY:
+    raise RuntimeError("SECRET_KEY environment variable is required.")
+if len(SECRET_KEY) < 32:
+    raise RuntimeError("SECRET_KEY must be at least 32 characters long.")
+
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_DAYS = 30
+ACCESS_TOKEN_EXPIRE_HOURS = 24
+
+def get_client_ip(request: Request) -> str:
+    raw_ip = request.client.host if request.client else "127.0.0.1"
+
+    if os.getenv("RENDER") == "true":
+        cf_ip = request.headers.get("CF-Connecting-IP")
+        if cf_ip:
+            candidate = cf_ip.strip()
+            try:
+                ipaddress.ip_address(candidate)
+                return candidate
+            except ValueError:
+                pass
+
+        # Fail closed.
+        # Do NOT trust X-Forwarded-For as a fallback.
+        # Do NOT trust a caller-controlled forwarded IP.
+        return raw_ip
+
+    # For local/non-Render use the direct socket IP.
+    return raw_ip
+
+
+limiter = Limiter(key_func=get_client_ip)
 
 security = HTTPBearer(auto_error=False)
 
@@ -57,7 +90,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 
 def create_access_token(user_id: int, email: str) -> str:
-    expires = datetime.now(timezone.utc) + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
+    expires = datetime.now(timezone.utc) + timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS)
     payload = {
         "sub": str(user_id),
         "email": email,
@@ -128,21 +161,41 @@ try:
 except Exception as migration_err:
     logger.info(f"Database migration notice: {migration_err}")
 
+DEFAULT_CORS_ORIGINS = [
+    "https://ideaforge-steel-alpha.vercel.app",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
+cors_env = os.getenv("CORS_ORIGINS")
+if cors_env is not None and cors_env.strip():
+    allow_origins = [origin.strip() for origin in cors_env.split(",") if origin.strip() and origin.strip() != "*"]
+else:
+    allow_origins = DEFAULT_CORS_ORIGINS
+
 app = FastAPI(title="IdeaForge API")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten this before real deployment
+    allow_origins=allow_origins,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
+    if isinstance(exc, HTTPException):
+        from fastapi.exception_handlers import http_exception_handler
+        return await http_exception_handler(request, exc)
+    if isinstance(exc, RateLimitExceeded):
+        return _rate_limit_exceeded_handler(request, exc)
     logger.error(f"Global unhandled error on {request.url.path}: {exc}", exc_info=True)
     return JSONResponse(
         status_code=500,
-        content={"error": True, "detail": str(exc), "message": "Something went wrong — please try again."}
+        content={"error": True, "message": "Something went wrong. Please try again."}
     )
 
 LLM_API_KEY = os.getenv("LLM_API_KEY")
@@ -636,7 +689,7 @@ def call_groq_llm(messages: list[dict]) -> dict:
             )
         except requests.RequestException as e:
             logger.error(f"Network error calling LLM API: {e}", exc_info=True)
-            raise HTTPException(status_code=502, detail=f"LLM API request failed: {str(e)}")
+            raise HTTPException(status_code=502, detail="LLM API request failed. Please try again later.")
 
         if resp.status_code == 429:
             logger.warning(f"Groq API 429 rate limit hit on attempt {attempt+1}. Backing off...")
@@ -783,7 +836,8 @@ def health_check():
 
 
 @app.post("/auth/signup", response_model=TokenResponse)
-def signup(req: UserAuthRequest, db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+def signup(request: Request, req: UserAuthRequest, db: Session = Depends(get_db)):
     email = (req.email or "").strip().lower()
     password = req.password or ""
     if not email or "@" not in email:
@@ -809,7 +863,8 @@ def signup(req: UserAuthRequest, db: Session = Depends(get_db)):
 
 
 @app.post("/auth/login", response_model=TokenResponse)
-def login(req: UserAuthRequest, db: Session = Depends(get_db)):
+@limiter.limit("10/minute")
+def login(request: Request, req: UserAuthRequest, db: Session = Depends(get_db)):
     email = (req.email or "").strip().lower()
     password = req.password or ""
     user = db.query(models.User).filter(models.User.email == email).first()
@@ -861,7 +916,7 @@ def get_roadmaps(
         logger.error(f"Error fetching roadmaps: {exc}", exc_info=True)
         return JSONResponse(
             status_code=500,
-            content={"error": True, "detail": str(exc), "message": "Failed to fetch roadmaps."}
+            content={"error": True, "message": "Failed to fetch roadmaps."}
         )
 
 
@@ -902,18 +957,20 @@ def get_roadmap(
         logger.error(f"Error fetching roadmap {roadmap_id}: {exc}", exc_info=True)
         return JSONResponse(
             status_code=500,
-            content={"error": True, "detail": str(exc), "message": "Failed to fetch roadmap."}
+            content={"error": True, "message": "Failed to fetch roadmap."}
         )
 
 
 @app.post("/roadmaps/{roadmap_id}/regenerate")
+@limiter.limit("20/hour")
 def regenerate_roadmap_section(
+    request: Request,
     roadmap_id: int,
-    request: RegenerateRequest,
+    req: RegenerateRequest,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    section_raw = (request.section or "").strip().lower()
+    section_raw = (req.section or "").strip().lower()
     if section_raw in ["stack", "recommended_stack"]:
         target_key = "recommended_stack"
     elif section_raw in ["setup_guide", "setup", "setupguide"]:
@@ -956,7 +1013,7 @@ def regenerate_roadmap_section(
     current_mvp = inner_data.get("mvp_features", [])
     current_stretch = inner_data.get("stretch_features", [])
 
-    previous_answers = request.previous_answers or []
+    previous_answers = req.previous_answers or []
     prev_answers_text = ""
     if previous_answers:
         prev_answers_text = "\nPrevious Clarifying Answers:\n" + "\n".join(
@@ -1088,7 +1145,7 @@ def regenerate_roadmap_section(
         db.refresh(roadmap)
 
         return {
-            "section": request.section,
+            "section": req.section,
             "target_key": target_key,
             "data": updated_section_data,
             "roadmap": {
@@ -1098,6 +1155,8 @@ def regenerate_roadmap_section(
                 "data": inner_data,
             },
         }
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error(
             f"Error regenerating section '{target_key}' for roadmap {roadmap_id}: {exc}",
@@ -1108,16 +1167,17 @@ def regenerate_roadmap_section(
             status_code=500,
             content={
                 "error": True,
-                "detail": str(exc),
-                "message": f"Failed to regenerate section {request.section}. Please try again.",
+                "message": f"Failed to regenerate section {req.section}. Please try again.",
             },
         )
 
 
 @app.post("/roadmaps/{roadmap_id}/ask")
+@limiter.limit("30/hour")
 def ask_about_roadmap(
+    request: Request,
     roadmap_id: int,
-    request: AskRequest,
+    req: AskRequest,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -1135,7 +1195,7 @@ def ask_about_roadmap(
             detail=f"Roadmap with id {roadmap_id} not found",
         )
 
-    user_message = (request.message or "").strip()
+    user_message = (req.message or "").strip()
     if not user_message:
         raise HTTPException(status_code=400, detail="Message cannot be empty")
 
@@ -1287,11 +1347,13 @@ def apply_roadmap_change(
 
 
 @app.post("/compare")
+@limiter.limit("10/hour")
 def compare_ideas(
-    request: CompareRequest,
+    request: Request,
+    req: CompareRequest,
     current_user: models.User = Depends(get_current_user),
 ):
-    raw_ideas = [i.strip() for i in (request.ideas or []) if i and i.strip()]
+    raw_ideas = [i.strip() for i in (req.ideas or []) if i and i.strip()]
     if len(raw_ideas) < 2 or len(raw_ideas) > 3:
         raise HTTPException(
             status_code=400,
@@ -1366,13 +1428,14 @@ def compare_ideas(
             "comparisons": cleaned_comparisons,
             "recommendation": recommendation,
         }
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error(f"Error in /compare endpoint: {exc}", exc_info=True)
         return JSONResponse(
             status_code=500,
             content={
                 "error": True,
-                "detail": str(exc),
                 "message": "Failed to compare project ideas. Please try again.",
             },
         )
@@ -1573,7 +1636,9 @@ def build_viva_questions_with_llm(idea: str, data: dict) -> list[dict]:
 
 
 @app.post("/roadmaps/viva")
+@limiter.limit("10/hour")
 def generate_viva_questions_endpoint(
+    request: Request,
     req: VivaRequest,
     db: Session = Depends(get_db),
     current_user: Optional[models.User] = Depends(get_optional_current_user),
@@ -1606,20 +1671,23 @@ def generate_viva_questions_endpoint(
             "count": len(questions),
             "questions": questions,
         }
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error(f"Error generating viva questions: {exc}", exc_info=True)
         return JSONResponse(
             status_code=500,
             content={
                 "error": True,
-                "detail": str(exc),
                 "message": "Failed to generate viva questions with AI. Please try again.",
             },
         )
 
 
 @app.post("/roadmaps/{roadmap_id}/viva")
+@limiter.limit("10/hour")
 def generate_viva_questions_by_id_endpoint(
+    request: Request,
     roadmap_id: int,
     db: Session = Depends(get_db),
     current_user: Optional[models.User] = Depends(get_optional_current_user),
@@ -1643,27 +1711,30 @@ def generate_viva_questions_by_id_endpoint(
             "count": len(questions),
             "questions": questions,
         }
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error(f"Error generating viva questions for roadmap {roadmap_id}: {exc}", exc_info=True)
         return JSONResponse(
             status_code=500,
             content={
                 "error": True,
-                "detail": str(exc),
                 "message": "Failed to generate viva questions with AI. Please try again.",
             },
         )
 
 
 @app.post("/plan")
+@limiter.limit("20/hour")
 def generate_plan(
-    request: IdeaRequest,
+    request: Request,
+    req: IdeaRequest,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
     try:
-        previous_answers = request.previous_answers or []
-        user_content = f"Project idea: {request.idea}"
+        previous_answers = req.previous_answers or []
+        user_content = f"Project idea: {req.idea}"
 
         if previous_answers:
             user_content += "\n\nPrevious clarifying answers provided by the user:"
@@ -1675,7 +1746,7 @@ def generate_plan(
             "just generate" in ans.lower() for ans in previous_answers
         )
 
-        detected_skill = detect_user_skill_level(previous_answers, request.idea)
+        detected_skill = detect_user_skill_level(previous_answers, req.idea)
 
         if is_roadmap_stage:
             user_content += "\nYou have reached the required questions or user requested generation. Generate the final project roadmap JSON now."
@@ -1683,26 +1754,26 @@ def generate_plan(
                 {"role": "system", "content": ROADMAP_SYSTEM_PROMPT},
                 {"role": "user", "content": user_content},
             ]
-            roadmap_response = generate_roadmap_with_validation(messages, user_skill_level=detected_skill, idea=request.idea)
+            roadmap_response = generate_roadmap_with_validation(messages, user_skill_level=detected_skill, idea=req.idea)
             try:
                 user_id_val = current_user.id if isinstance(current_user, models.User) else getattr(current_user, "id", None)
                 roadmap_record = models.Roadmap(
                     user_id=user_id_val,
-                    original_idea=request.idea,
+                    original_idea=req.idea,
                     data=roadmap_response.get("data", roadmap_response),
                 )
                 db.add(roadmap_record)
                 db.commit()
                 db.refresh(roadmap_record)
                 roadmap_response["id"] = roadmap_record.id
-                roadmap_response["original_idea"] = request.idea
+                roadmap_response["original_idea"] = req.idea
                 if isinstance(roadmap_response.get("data"), dict):
                     roadmap_response["data"]["id"] = roadmap_record.id
-                    roadmap_response["data"]["original_idea"] = request.idea
+                    roadmap_response["data"]["original_idea"] = req.idea
             except Exception as db_err:
                 logger.error(f"Database save error in roadmap stage: {db_err}", exc_info=True)
                 db.rollback()
-            roadmap_response["original_idea"] = request.idea
+            roadmap_response["original_idea"] = req.idea
             return roadmap_response
         else:
             messages = [
@@ -1713,7 +1784,7 @@ def generate_plan(
             if response.get("type") == "roadmap":
                 errors = validate_roadmap_schema(response)
                 if errors:
-                    response = generate_roadmap_with_validation(messages, user_skill_level=detected_skill, idea=request.idea)
+                    response = generate_roadmap_with_validation(messages, user_skill_level=detected_skill, idea=req.idea)
                 else:
                     inner_data = response.get("data") if isinstance(response.get("data"), dict) else response
                     target_skill = detected_skill or inner_data.get("user_skill_level")
@@ -1730,7 +1801,7 @@ def generate_plan(
                         if not valid_guide:
                             valid_guide = build_beginner_guide_items(
                                 inner_data.get("recommended_stack", []),
-                                request.idea
+                                req.idea
                             )
                         inner_data["beginner_guide"] = valid_guide
                     elif target_skill:
@@ -1739,21 +1810,21 @@ def generate_plan(
                     user_id_val = current_user.id if isinstance(current_user, models.User) else getattr(current_user, "id", None)
                     roadmap_record = models.Roadmap(
                         user_id=user_id_val,
-                        original_idea=request.idea,
+                        original_idea=req.idea,
                         data=response.get("data", response),
                     )
                     db.add(roadmap_record)
                     db.commit()
                     db.refresh(roadmap_record)
                     response["id"] = roadmap_record.id
-                    response["original_idea"] = request.idea
+                    response["original_idea"] = req.idea
                     if isinstance(response.get("data"), dict):
                         response["data"]["id"] = roadmap_record.id
-                        response["data"]["original_idea"] = request.idea
+                        response["data"]["original_idea"] = req.idea
                 except Exception as db_err:
                     logger.error(f"Database save error in question stage: {db_err}", exc_info=True)
                     db.rollback()
-                response["original_idea"] = request.idea
+                response["original_idea"] = req.idea
             return response
     except HTTPException as he:
         logger.error(f"HTTP error in /plan endpoint ({he.status_code}): {he.detail}", exc_info=True)
@@ -1765,7 +1836,7 @@ def generate_plan(
         logger.error(f"Unexpected error in /plan endpoint: {exc}", exc_info=True)
         return JSONResponse(
             status_code=500,
-            content={"error": True, "detail": str(exc), "message": "Something went wrong — please try again."}
+            content={"error": True, "message": "Something went wrong. Please try again."}
         )
 
 

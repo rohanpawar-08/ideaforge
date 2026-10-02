@@ -7,3 +7,4 @@ requests==2.32.3
 pydantic==2.9.2
 bcrypt==5.0.0
 pyjwt==2.15.0
+slowapi==0.1.10
