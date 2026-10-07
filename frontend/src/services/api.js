@@ -116,13 +116,21 @@ export async function generatePlan(idea, previousAnswers = [], token = '', onUna
   if (!res.ok) {
     const errData = await res.json().catch(() => null)
     console.error('generatePlan returned error:', res.status, errData)
-    throw new Error('Something went wrong — please try again.')
+    const friendlyMsg =
+      errData?.detail ||
+      errData?.message ||
+      (res.status === 429
+        ? 'Daily AI blueprint generation limit reached. Please try again tomorrow.'
+        : res.status === 502 || res.status === 504
+        ? 'AI generation is temporarily unavailable. Please try again.'
+        : 'Something went wrong — please try again.')
+    throw new Error(friendlyMsg)
   }
 
   const data = await res.json()
   if (data.error) {
     console.error('generatePlan business error:', data)
-    throw new Error('Something went wrong — please try again.')
+    throw new Error(data.message || 'Something went wrong — please try again.')
   }
   return data
 }
@@ -180,12 +188,20 @@ export async function regenerateSection(roadmapId, sectionKey, previousAnswers =
 
   if (!res.ok) {
     const errData = await res.json().catch(() => null)
-    throw new Error(errData?.detail || `Server error (${res.status})`)
+    const msg =
+      errData?.detail ||
+      errData?.message ||
+      (res.status === 429
+        ? 'Daily AI regeneration limit reached. Please try again tomorrow.'
+        : res.status === 502 || res.status === 504
+        ? 'AI generation is temporarily unavailable. Please try again.'
+        : `Server error (${res.status})`)
+    throw new Error(msg)
   }
 
   const result = await res.json()
   if (result.error) {
-    throw new Error(result.message || 'Failed to regenerate section')
+    throw new Error(result.message || 'AI generation is temporarily unavailable. Please try again.')
   }
   return result
 }
@@ -211,7 +227,15 @@ export async function askRoadmap(roadmapId, message, token = '', onUnauthorized 
 
   if (!res.ok) {
     const errData = await res.json().catch(() => null)
-    throw new Error(errData?.detail || `Server returned ${res.status}`)
+    const msg =
+      errData?.detail ||
+      errData?.message ||
+      (res.status === 429
+        ? 'Daily AI chat limit reached. Please try again tomorrow.'
+        : res.status === 502 || res.status === 504
+        ? 'AI service is temporarily unavailable. Please try again.'
+        : `Server returned ${res.status}`)
+    throw new Error(msg)
   }
 
   return res.json()
@@ -421,6 +445,21 @@ export async function deleteAccount(password, token = '', onUnauthorized = null)
   const data = await res.json().catch(() => null)
   if (!res.ok) {
     throw new Error(data?.detail || data?.message || `Account deletion failed (${res.status})`)
+  }
+  return data
+}
+
+/**
+ * Fetch daily AI usage quotas and consumption
+ * @param {string} token
+ * @param {() => void} [onUnauthorized]
+ * @returns {Promise<{ date: string, usage: object }>}
+ */
+export async function getAIUsage(token = '', onUnauthorized = null) {
+  const res = await apiFetch('/account/ai-usage', { method: 'GET' }, token, onUnauthorized)
+  const data = await res.json().catch(() => null)
+  if (!res.ok) {
+    throw new Error(data?.detail || `Failed to fetch AI usage (${res.status})`)
   }
   return data
 }

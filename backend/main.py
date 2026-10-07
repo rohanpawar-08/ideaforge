@@ -39,8 +39,25 @@ from schemas import (
     DeleteAccountRequest,
     MessageResponse,
 )
+import uuid
 import models
 from services import email_service
+from services import ai_service as ai_service_module
+from services.ai_service import (
+    ai_service,
+    validate_idea_length,
+    validate_clarification_answers,
+    validate_chat_message,
+    validate_compare_ideas,
+    validate_regenerate_input,
+    check_daily_user_limit,
+    record_ai_usage_event,
+    get_user_ai_usage_summary,
+    acquire_user_ai_lock,
+    PROMPT_INJECTION_DEFENSE_DIRECTIVE,
+    AI_BLUEPRINT_TIMEOUT,
+    AI_REQUEST_TIMEOUT,
+)
 import blueprint_v2
 from blueprint_v2 import (
     ADAPTIVE_CLARIFICATION_SYSTEM_PROMPT,
@@ -190,6 +207,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def request_correlation_id_middleware(request: Request, call_next):
+    raw_rid = request.headers.get("X-Request-ID", "").strip()
+    if raw_rid and re.match(r"^[a-zA-Z0-9\-_]{1,64}$", raw_rid):
+        request_id = raw_rid
+    else:
+        request_id = str(uuid.uuid4())
+
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
+
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
@@ -543,66 +574,55 @@ def build_beginner_guide_items(stack: list[str], idea: str) -> list[dict]:
     return items
 
 
-def call_groq_llm(messages: list[dict]) -> dict:
-    if not LLM_API_KEY:
-        logger.error("LLM_API_KEY is not configured.")
-        raise HTTPException(status_code=500, detail="LLM_API_KEY is not configured")
+_last_llm_usage: Optional[dict] = None
 
-    for attempt in range(3):
-        try:
-            resp = requests.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {LLM_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": LLM_MODEL,
-                    "messages": messages,
-                    "response_format": {"type": "json_object"},
-                },
-                timeout=45,
-            )
-        except requests.RequestException as e:
-            logger.error(f"Network error calling LLM API: {e}", exc_info=True)
-            raise HTTPException(status_code=502, detail="LLM API request failed. Please try again later.")
 
-        if resp.status_code == 429:
-            logger.warning(f"Groq API 429 rate limit hit on attempt {attempt+1}. Backing off...")
-            if attempt < 2:
-                time.sleep(12)
-                continue
-            else:
-                raise HTTPException(
-                    status_code=429,
-                    detail="LLM API rate limit exceeded. Please wait a few seconds and try again.",
-                )
+def call_groq_llm(
+    messages: list[dict],
+    read_timeout: Optional[int] = None,
+    request_id: Optional[str] = None,
+    user_id: Optional[int] = None,
+    action: str = "ai_call",
+) -> dict:
+    global _last_llm_usage
+    res = ai_service.generate_json(
+        messages=messages,
+        read_timeout=read_timeout,
+        request_id=request_id,
+        user_id=user_id,
+        action=action,
+    )
+    _last_llm_usage = {
+        "prompt_tokens": res.prompt_tokens,
+        "completion_tokens": res.completion_tokens,
+        "total_tokens": res.total_tokens,
+    }
+    return res.data
 
-        if resp.status_code != 200:
-            logger.error(f"LLM API returned status {resp.status_code}: {resp.text}")
-            raise HTTPException(
-                status_code=resp.status_code,
-                detail=f"Groq API error: {resp.text}",
-            )
 
-        try:
-            data = resp.json()
-            raw_content = data["choices"][0]["message"]["content"].strip()
-            if raw_content.startswith("```"):
-                raw_content = raw_content.strip("`")
-                if raw_content.startswith("json"):
-                    raw_content = raw_content[4:].strip()
-            return json.loads(raw_content)
-        except (KeyError, IndexError, json.JSONDecodeError) as err:
-            logger.error(f"Malformed JSON returned by model: {err}. Raw response was: {resp.text}", exc_info=True)
-            raise ValueError(f"Malformed JSON returned by model: {err}")
+def _invoke_llm(messages: list[dict], **kwargs) -> dict:
+    """Invokes call_groq_llm, filtering kwargs if call_groq_llm was monkeypatched by a test with a simple signature."""
+    import inspect
+    fn = call_groq_llm
+    try:
+        sig = inspect.signature(fn)
+        has_var_keyword = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+        if has_var_keyword:
+            return fn(messages, **kwargs)
+        filtered = {k: v for k, v in kwargs.items() if k in sig.parameters}
+        return fn(messages, **filtered)
+    except Exception:
+        return fn(messages)
 
 
 def generate_roadmap_with_validation(
     messages: list[dict],
     user_skill_level: str = None,
     idea: str = "",
-    previous_answers: list[str] = None
+    previous_answers: list[str] = None,
+    read_timeout: Optional[int] = AI_BLUEPRINT_TIMEOUT,
+    request_id: Optional[str] = None,
+    user_id: Optional[int] = None,
 ) -> dict:
     attempt_messages = list(messages)
     max_retries = 1
@@ -613,9 +633,18 @@ def generate_roadmap_with_validation(
 
     for attempt in range(max_retries + 1):
         try:
-            parsed = call_groq_llm(attempt_messages)
+            parsed = _invoke_llm(
+                attempt_messages,
+                read_timeout=read_timeout,
+                request_id=request_id,
+                user_id=user_id,
+                action="plan",
+            )
             errors = validate_blueprint_v2_schema(parsed)
-        except (ValueError, HTTPException) as err:
+        except HTTPException:
+            # Re-raise explicit HTTP exceptions (e.g. 504 timeout, 429 rate limit)
+            raise
+        except (ValueError, Exception) as err:
             logger.warning(f"Blueprint generation attempt {attempt + 1} encountered error: {err}")
             errors = [str(err)]
             parsed = None
@@ -923,6 +952,14 @@ def export_account_data(
     }
 
 
+@app.get("/account/ai-usage")
+def get_account_ai_usage(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return get_user_ai_usage_summary(db, current_user.id)
+
+
 @app.delete("/account", response_model=MessageResponse)
 @limiter.limit("3/hour")
 def delete_account(
@@ -942,6 +979,9 @@ def delete_account(
         db.query(models.Roadmap).filter(models.Roadmap.user_id == current_user.id).delete()
         db.query(models.PasswordResetToken).filter(
             models.PasswordResetToken.user_id == current_user.id
+        ).delete()
+        db.query(models.AIUsageEvent).filter(
+            models.AIUsageEvent.user_id == current_user.id
         ).delete()
         db.delete(current_user)
         db.commit()
@@ -1054,6 +1094,10 @@ def regenerate_roadmap_section(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
+    validate_regenerate_input(getattr(req, "instruction", None), req.previous_answers)
+    user_id_val = current_user.id if isinstance(current_user, models.User) else getattr(current_user, "id", None)
+    check_daily_user_limit(db, user_id_val, "regenerate")
+
     roadmap = (
         db.query(models.Roadmap)
         .filter(
@@ -1195,74 +1239,94 @@ def regenerate_roadmap_section(
             f"Regenerate ONLY the week-by-week milestone execution plan spanning {estimated_weeks} weeks while keeping everything else consistent."
         )
 
+    system_prompt = PROMPT_INJECTION_DEFENSE_DIRECTIVE + "\n" + system_prompt
+
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
 
-    try:
-        llm_response = call_groq_llm(messages)
-        if target_key == "recommended_stack":
-            updated_section_data = (
-                llm_response.get("recommended_stack")
-                or llm_response.get("stack")
-                or (llm_response if isinstance(llm_response, list) else [])
+    with acquire_user_ai_lock(user_id_val, "regenerate"):
+        try:
+            req_id = getattr(getattr(request, "state", None), "request_id", None)
+            llm_response = _invoke_llm(
+                messages,
+                read_timeout=AI_REQUEST_TIMEOUT,
+                request_id=req_id,
+                user_id=user_id_val,
+                action="regenerate",
             )
-            if not isinstance(updated_section_data, list):
-                updated_section_data = [str(updated_section_data)]
-        elif target_key == "setup_guide":
-            updated_section_data = llm_response.get("setup_guide") or llm_response
-            if not isinstance(updated_section_data, dict):
-                raise ValueError("setup_guide must be a JSON object")
-        elif target_key == "suggested_schema":
-            updated_section_data = (
-                llm_response.get("suggested_schema")
-                or llm_response.get("schema")
-                or (llm_response if isinstance(llm_response, list) else [])
+            record_ai_usage_event(
+                db,
+                user_id=user_id_val,
+                action="regenerate",
+                success=True,
+                tokens=_last_llm_usage,
             )
-            if not isinstance(updated_section_data, list):
-                raise ValueError("suggested_schema must be a list of table objects")
-        else:  # milestones
-            updated_section_data = (
-                llm_response.get("milestones")
-                or (llm_response if isinstance(llm_response, list) else [])
-            )
-            if not isinstance(updated_section_data, list):
-                raise ValueError("milestones must be a list of milestone objects")
 
-        # Update in database
-        inner_data[target_key] = updated_section_data
-        roadmap.data = dict(current_data)
-        flag_modified(roadmap, "data")
-        db.commit()
-        db.refresh(roadmap)
+            if target_key == "recommended_stack":
+                updated_section_data = (
+                    llm_response.get("recommended_stack")
+                    or llm_response.get("stack")
+                    or (llm_response if isinstance(llm_response, list) else [])
+                )
+                if not isinstance(updated_section_data, list):
+                    updated_section_data = [str(updated_section_data)]
+            elif target_key == "setup_guide":
+                updated_section_data = llm_response.get("setup_guide") or llm_response
+                if not isinstance(updated_section_data, dict):
+                    raise ValueError("setup_guide must be a JSON object")
+            elif target_key == "suggested_schema":
+                updated_section_data = (
+                    llm_response.get("suggested_schema")
+                    or llm_response.get("schema")
+                    or (llm_response if isinstance(llm_response, list) else [])
+                )
+                if not isinstance(updated_section_data, list):
+                    raise ValueError("suggested_schema must be a list of table objects")
+            else:  # milestones
+                updated_section_data = (
+                    llm_response.get("milestones")
+                    or (llm_response if isinstance(llm_response, list) else [])
+                )
+                if not isinstance(updated_section_data, list):
+                    raise ValueError("milestones must be a list of milestone objects")
 
-        return {
-            "section": req.section,
-            "target_key": target_key,
-            "data": updated_section_data,
-            "roadmap": {
-                "id": roadmap.id,
-                "original_idea": roadmap.original_idea,
-                "created_at": roadmap.created_at.isoformat() if roadmap.created_at else None,
-                "data": inner_data,
-            },
-        }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.error(
-            f"Error regenerating section '{target_key}' for roadmap {roadmap_id}: {exc}",
-            exc_info=True,
-        )
-        db.rollback()
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": True,
-                "message": f"Failed to regenerate section {req.section}. Please try again.",
-            },
-        )
+            # Update in database
+            inner_data[target_key] = updated_section_data
+            roadmap.data = dict(current_data)
+            flag_modified(roadmap, "data")
+            db.commit()
+            db.refresh(roadmap)
+
+            return {
+                "section": req.section,
+                "target_key": target_key,
+                "data": updated_section_data,
+                "roadmap": {
+                    "id": roadmap.id,
+                    "original_idea": roadmap.original_idea,
+                    "created_at": roadmap.created_at.isoformat() if roadmap.created_at else None,
+                    "data": inner_data,
+                },
+            }
+        except HTTPException:
+            record_ai_usage_event(db, user_id=user_id_val, action="regenerate", success=False)
+            raise
+        except Exception as exc:
+            record_ai_usage_event(db, user_id=user_id_val, action="regenerate", success=False)
+            logger.error(
+                f"Error regenerating section '{target_key}' for roadmap {roadmap_id}: {exc}",
+                exc_info=True,
+            )
+            db.rollback()
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "error": True,
+                    "message": f"Failed to regenerate section {req.section}. Please try again.",
+                },
+            )
 
 
 @app.post("/roadmaps/{roadmap_id}/ask")
@@ -1291,6 +1355,10 @@ def ask_about_roadmap(
     user_message = (req.message or "").strip()
     if not user_message:
         raise HTTPException(status_code=400, detail="Message cannot be empty")
+    validate_chat_message(user_message)
+
+    user_id_val = current_user.id if isinstance(current_user, models.User) else getattr(current_user, "id", None)
+    check_daily_user_limit(db, user_id_val, "chat")
 
     current_data = dict(roadmap.data) if isinstance(roadmap.data, dict) else {}
     inner_data = (
@@ -1303,6 +1371,7 @@ def ask_about_roadmap(
     full_roadmap_json = json.dumps(inner_data, indent=2)
 
     system_prompt = (
+        PROMPT_INJECTION_DEFENSE_DIRECTIVE + "\n"
         "You are an expert technical advisor and software project coach assisting a developer with their project roadmap.\n"
         "You have full context of the original idea and the complete roadmap.\n\n"
         "The developer will ask you questions or request modifications to their roadmap.\n"
@@ -1336,45 +1405,65 @@ def ask_about_roadmap(
         {"role": "user", "content": user_prompt},
     ]
 
-    try:
-        llm_response = call_groq_llm(messages)
-        reply = llm_response.get("reply") or str(llm_response)
-        proposed_change = llm_response.get("proposed_change")
+    with acquire_user_ai_lock(user_id_val, "chat"):
+        try:
+            req_id = getattr(getattr(request, "state", None), "request_id", None)
+            llm_response = _invoke_llm(
+                messages,
+                read_timeout=AI_REQUEST_TIMEOUT,
+                request_id=req_id,
+                user_id=user_id_val,
+                action="chat",
+            )
+            record_ai_usage_event(
+                db,
+                user_id=user_id_val,
+                action="chat",
+                success=True,
+                tokens=_last_llm_usage,
+            )
 
-        # Validate and clean proposed_change if present
-        if isinstance(proposed_change, dict) and proposed_change.get("data"):
-            section_raw = str(proposed_change.get("section", "")).lower()
-            if "stack" in section_raw:
-                proposed_change["section"] = "stack"
-                proposed_change["target_key"] = "recommended_stack"
-                if not isinstance(proposed_change["data"], list):
-                    proposed_change["data"] = [str(proposed_change["data"])]
-            elif "setup" in section_raw:
-                proposed_change["section"] = "setup_guide"
-                proposed_change["target_key"] = "setup_guide"
-            elif "schema" in section_raw or "table" in section_raw or "database" in section_raw:
-                proposed_change["section"] = "suggested_schema"
-                proposed_change["target_key"] = "suggested_schema"
-                if not isinstance(proposed_change["data"], list):
-                    proposed_change = None
-            elif "milestone" in section_raw or "week" in section_raw:
-                proposed_change["section"] = "milestones"
-                proposed_change["target_key"] = "milestones"
-                if not isinstance(proposed_change["data"], list):
-                    proposed_change = None
-        else:
-            proposed_change = None
+            reply = llm_response.get("reply") or str(llm_response)
+            proposed_change = llm_response.get("proposed_change")
 
-        return {
-            "reply": reply,
-            "proposed_change": proposed_change,
-        }
-    except Exception as exc:
-        logger.error(f"Error in /roadmaps/{roadmap_id}/ask: {exc}", exc_info=True)
-        return {
-            "reply": f"I reviewed your question regarding '{user_message}'. Could you clarify or retry your request?",
-            "proposed_change": None,
-        }
+            # Validate and clean proposed_change if present
+            if isinstance(proposed_change, dict) and proposed_change.get("data"):
+                section_raw = str(proposed_change.get("section", "")).lower()
+                if "stack" in section_raw:
+                    proposed_change["section"] = "stack"
+                    proposed_change["target_key"] = "recommended_stack"
+                    if not isinstance(proposed_change["data"], list):
+                        proposed_change["data"] = [str(proposed_change["data"])]
+                elif "setup" in section_raw:
+                    proposed_change["section"] = "setup_guide"
+                    proposed_change["target_key"] = "setup_guide"
+                elif "schema" in section_raw or "table" in section_raw or "database" in section_raw:
+                    proposed_change["section"] = "suggested_schema"
+                    proposed_change["target_key"] = "suggested_schema"
+                    if not isinstance(proposed_change["data"], list):
+                        proposed_change = None
+                elif "milestone" in section_raw or "week" in section_raw:
+                    proposed_change["section"] = "milestones"
+                    proposed_change["target_key"] = "milestones"
+                    if not isinstance(proposed_change["data"], list):
+                        proposed_change = None
+            else:
+                proposed_change = None
+
+            return {
+                "reply": reply,
+                "proposed_change": proposed_change,
+            }
+        except HTTPException:
+            record_ai_usage_event(db, user_id=user_id_val, action="chat", success=False)
+            raise
+        except Exception as exc:
+            record_ai_usage_event(db, user_id=user_id_val, action="chat", success=False)
+            logger.error(f"Error in /roadmaps/{roadmap_id}/ask: {exc}", exc_info=True)
+            return {
+                "reply": f"I reviewed your question regarding '{user_message}'. Could you clarify or retry your request?",
+                "proposed_change": None,
+            }
 
 
 @app.post("/roadmaps/{roadmap_id}/apply-change")
@@ -1458,7 +1547,13 @@ def compare_ideas(
     request: Request,
     req: CompareRequest,
     current_user: models.User = Depends(get_current_user),
+    db: Optional[Session] = Depends(get_db),
 ):
+    validate_compare_ideas(req.ideas)
+    user_id_val = current_user.id if isinstance(current_user, models.User) else getattr(current_user, "id", None)
+    if db is not None:
+        check_daily_user_limit(db, user_id_val, "compare")
+
     raw_ideas = [i.strip() for i in (req.ideas or []) if i and i.strip()]
     if len(raw_ideas) < 2 or len(raw_ideas) > 3:
         raise HTTPException(
@@ -1471,6 +1566,7 @@ def compare_ideas(
     )
 
     system_prompt = (
+        PROMPT_INJECTION_DEFENSE_DIRECTIVE + "\n"
         "You are an expert technical product advisor and software architect.\n"
         "Your task is to evaluate and compare 2 to 3 software project ideas objectively.\n"
         "Analyze each idea across the following comprehensive dimensions:\n"
@@ -1511,55 +1607,76 @@ def compare_ideas(
         {"role": "user", "content": user_prompt},
     ]
 
-    try:
-        data = call_groq_llm(messages)
-        comparisons = (
-            data.get("comparisons")
-            or data.get("ideas")
-            or data.get("comparison")
-            or (data if isinstance(data, list) else None)
-        )
-        if isinstance(comparisons, dict):
-            comparisons = list(comparisons.values())
+    with acquire_user_ai_lock(user_id_val, "compare"):
+        try:
+            req_id = getattr(getattr(request, "state", None), "request_id", None)
+            data = _invoke_llm(
+                messages,
+                read_timeout=AI_REQUEST_TIMEOUT,
+                request_id=req_id,
+                user_id=user_id_val,
+                action="compare",
+            )
+            if db is not None:
+                record_ai_usage_event(
+                    db,
+                    user_id=user_id_val,
+                    action="compare",
+                    success=True,
+                    tokens=_last_llm_usage,
+                )
 
-        if not isinstance(comparisons, list) or len(comparisons) < 2:
-            raise ValueError("Malformed response: 'comparisons' must be a list with at least 2 entries")
+            comparisons = (
+                data.get("comparisons")
+                or data.get("ideas")
+                or data.get("comparison")
+                or (data if isinstance(data, list) else None)
+            )
+            if isinstance(comparisons, dict):
+                comparisons = list(comparisons.values())
 
-        cleaned_comparisons = []
-        for idx, item in enumerate(comparisons):
-            original_input_text = raw_ideas[idx] if idx < len(raw_ideas) else item.get("idea", f"Idea {idx+1}")
-            cleaned_comparisons.append({
-                "idea": original_input_text,
-                "feasibility": str(item.get("feasibility", "intermediate")).lower(),
-                "estimated_weeks": int(item.get("estimated_weeks", 4)),
-                "complexity": str(item.get("complexity", "Moderate")),
-                "learning_difficulty": str(item.get("learning_difficulty", "Moderate")),
-                "portfolio_value": str(item.get("portfolio_value", "High")),
-                "monetization_potential": str(item.get("monetization_potential", "Moderate")),
-                "major_risks": [str(r) for r in (item.get("major_risks") or ["Scope creep under tight timelines"])],
-                "pros": [str(p) for p in (item.get("pros") or [])],
-                "cons": [str(c) for c in (item.get("cons") or [])],
-            })
+            if not isinstance(comparisons, list) or len(comparisons) < 2:
+                raise ValueError("Malformed response: 'comparisons' must be a list with at least 2 entries")
 
-        recommendation = str(data.get("recommendation", "")).strip()
-        if not recommendation:
-            recommendation = "All compared ideas offer distinct trade-offs. Choose based on your target timeline and desired learning outcomes."
+            cleaned_comparisons = []
+            for idx, item in enumerate(comparisons):
+                original_input_text = raw_ideas[idx] if idx < len(raw_ideas) else item.get("idea", f"Idea {idx+1}")
+                cleaned_comparisons.append({
+                    "idea": original_input_text,
+                    "feasibility": str(item.get("feasibility", "intermediate")).lower(),
+                    "estimated_weeks": int(item.get("estimated_weeks", 4)),
+                    "complexity": str(item.get("complexity", "Moderate")),
+                    "learning_difficulty": str(item.get("learning_difficulty", "Moderate")),
+                    "portfolio_value": str(item.get("portfolio_value", "High")),
+                    "monetization_potential": str(item.get("monetization_potential", "Moderate")),
+                    "major_risks": [str(r) for r in (item.get("major_risks") or ["Scope creep under tight timelines"])],
+                    "pros": [str(p) for p in (item.get("pros") or [])],
+                    "cons": [str(c) for c in (item.get("cons") or [])],
+                })
 
-        return {
-            "comparisons": cleaned_comparisons,
-            "recommendation": recommendation,
-        }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.error(f"Error in /compare endpoint: {exc}", exc_info=True)
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": True,
-                "message": "Failed to compare project ideas. Please try again.",
-            },
-        )
+            recommendation = str(data.get("recommendation", "")).strip()
+            if not recommendation:
+                recommendation = "All compared ideas offer distinct trade-offs. Choose based on your target timeline and desired learning outcomes."
+
+            return {
+                "comparisons": cleaned_comparisons,
+                "recommendation": recommendation,
+            }
+        except HTTPException:
+            if db is not None:
+                record_ai_usage_event(db, user_id=user_id_val, action="compare", success=False)
+            raise
+        except Exception as exc:
+            if db is not None:
+                record_ai_usage_event(db, user_id=user_id_val, action="compare", success=False)
+            logger.error(f"Error in /compare endpoint: {exc}", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "error": True,
+                    "message": "Failed to compare project ideas. Please try again.",
+                },
+            )
 
 
 def supplement_viva_questions(existing: list[dict], idea: str, data: dict) -> list[dict]:
@@ -1665,7 +1782,12 @@ def supplement_viva_questions(existing: list[dict], idea: str, data: dict) -> li
     return results
 
 
-def build_viva_questions_with_llm(idea: str, data: dict) -> list[dict]:
+def build_viva_questions_with_llm(
+    idea: str,
+    data: dict,
+    request_id: Optional[str] = None,
+    user_id: Optional[int] = None,
+) -> list[dict]:
     clean_idea = (idea or "").strip()
     feasibility = data.get("feasibility", "intermediate")
     weeks = data.get("estimated_weeks", 4)
@@ -1700,6 +1822,7 @@ def build_viva_questions_with_llm(idea: str, data: dict) -> list[dict]:
     pitfalls_str = "\n- ".join(str(p) for p in pitfalls) if isinstance(pitfalls, list) else str(pitfalls)
 
     system_prompt = (
+        PROMPT_INJECTION_DEFENSE_DIRECTIVE + "\n"
         "You are an expert academic examiner, university professor, and principal software architect.\n"
         "Your task is to generate 10 to 15 rigorous, comprehensive, project-specific viva voce questions and technical interview questions that an examiner would ask about this exact project.\n"
         "Questions must directly reference the user's specific project domain, recommended tech stack, database schema tables, architecture, and feature requirements.\n\n"
@@ -1740,7 +1863,13 @@ def build_viva_questions_with_llm(idea: str, data: dict) -> list[dict]:
 
     cleaned_questions = []
     try:
-        llm_resp = call_groq_llm(messages)
+        llm_resp = _invoke_llm(
+            messages,
+            read_timeout=AI_REQUEST_TIMEOUT,
+            request_id=request_id,
+            user_id=user_id,
+            action="viva",
+        )
         questions_raw = (
             llm_resp.get("questions")
             or llm_resp.get("viva_questions")
@@ -1776,6 +1905,11 @@ def generate_viva_questions_endpoint(
 ):
     roadmap_data = None
     idea = (req.idea or "").strip()
+    validate_idea_length(idea)
+
+    user_id_val = current_user.id if current_user else None
+    if user_id_val is not None:
+        check_daily_user_limit(db, user_id_val, "viva")
 
     if req.roadmap_id:
         query = db.query(models.Roadmap).filter(models.Roadmap.id == req.roadmap_id)
@@ -1795,24 +1929,43 @@ def generate_viva_questions_endpoint(
     if not roadmap_data:
         raise HTTPException(status_code=400, detail="Missing roadmap data or valid roadmap_id")
 
-    try:
-        questions = build_viva_questions_with_llm(idea, roadmap_data)
-        return {
-            "idea": idea,
-            "count": len(questions),
-            "questions": questions,
-        }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.error(f"Error generating viva questions: {exc}", exc_info=True)
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": True,
-                "message": "Failed to generate viva questions with AI. Please try again.",
-            },
-        )
+    with acquire_user_ai_lock(user_id_val, "viva"):
+        try:
+            req_id = getattr(getattr(request, "state", None), "request_id", None)
+            questions = build_viva_questions_with_llm(
+                idea,
+                roadmap_data,
+                request_id=req_id,
+                user_id=user_id_val,
+            )
+            if user_id_val is not None:
+                record_ai_usage_event(
+                    db,
+                    user_id=user_id_val,
+                    action="viva",
+                    success=True,
+                    tokens=_last_llm_usage,
+                )
+            return {
+                "idea": idea,
+                "count": len(questions),
+                "questions": questions,
+            }
+        except HTTPException:
+            if user_id_val is not None:
+                record_ai_usage_event(db, user_id=user_id_val, action="viva", success=False)
+            raise
+        except Exception as exc:
+            if user_id_val is not None:
+                record_ai_usage_event(db, user_id=user_id_val, action="viva", success=False)
+            logger.error(f"Error generating viva questions: {exc}", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "error": True,
+                    "message": "Failed to generate viva questions with AI. Please try again.",
+                },
+            )
 
 
 @app.post("/roadmaps/{roadmap_id}/viva")
@@ -1833,26 +1986,50 @@ def generate_viva_questions_by_id_endpoint(
     data_val = record.data or {}
     roadmap_data = data_val.get("data", data_val) if isinstance(data_val, dict) else {}
     idea = record.original_idea or ""
+    validate_idea_length(idea)
 
-    try:
-        questions = build_viva_questions_with_llm(idea, roadmap_data)
-        return {
-            "roadmap_id": roadmap_id,
-            "idea": idea,
-            "count": len(questions),
-            "questions": questions,
-        }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.error(f"Error generating viva questions for roadmap {roadmap_id}: {exc}", exc_info=True)
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": True,
-                "message": "Failed to generate viva questions with AI. Please try again.",
-            },
-        )
+    user_id_val = current_user.id if current_user else None
+    if user_id_val is not None:
+        check_daily_user_limit(db, user_id_val, "viva")
+
+    with acquire_user_ai_lock(user_id_val, "viva"):
+        try:
+            req_id = getattr(getattr(request, "state", None), "request_id", None)
+            questions = build_viva_questions_with_llm(
+                idea,
+                roadmap_data,
+                request_id=req_id,
+                user_id=user_id_val,
+            )
+            if user_id_val is not None:
+                record_ai_usage_event(
+                    db,
+                    user_id=user_id_val,
+                    action="viva",
+                    success=True,
+                    tokens=_last_llm_usage,
+                )
+            return {
+                "roadmap_id": roadmap_id,
+                "idea": idea,
+                "count": len(questions),
+                "questions": questions,
+            }
+        except HTTPException:
+            if user_id_val is not None:
+                record_ai_usage_event(db, user_id=user_id_val, action="viva", success=False)
+            raise
+        except Exception as exc:
+            if user_id_val is not None:
+                record_ai_usage_event(db, user_id=user_id_val, action="viva", success=False)
+            logger.error(f"Error generating viva questions for roadmap {roadmap_id}: {exc}", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "error": True,
+                    "message": "Failed to generate viva questions with AI. Please try again.",
+                },
+            )
 
 
 @app.post("/plan")
@@ -1863,75 +2040,59 @@ def generate_plan(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    try:
-        previous_answers = req.previous_answers or []
-        user_content = f"Project idea: {req.idea}"
+    validate_idea_length(req.idea)
+    validate_clarification_answers(req.previous_answers)
 
-        if previous_answers:
-            user_content += "\n\nPrevious clarifying answers provided by the user:"
-            for idx, ans in enumerate(previous_answers, 1):
-                user_content += f"\nQuestion {idx} answer: {ans}"
-            user_content += f"\n\nTotal questions answered so far: {len(previous_answers)} of 3."
+    user_id_val = current_user.id if isinstance(current_user, models.User) else getattr(current_user, "id", None)
+    check_daily_user_limit(db, user_id_val, "plan")
 
-        detected_skill = detect_user_experience_level(req.idea, previous_answers)
+    with acquire_user_ai_lock(user_id_val, "plan"):
+        try:
+            previous_answers = req.previous_answers or []
+            user_content = f"Project idea: {req.idea}"
 
-        # Stop conditions:
-        # Rule C: 0 questions if idea already contains enough information.
-        # Rule F: Maximum 3 questions total.
-        # Rule H: Stop interrogating if user says "I don't know", "you decide", "just generate", etc.
-        has_stop_signal = any(is_stop_interrogation_signal(ans) for ans in previous_answers)
-        is_max_questions = len(previous_answers) >= 3
-        is_sufficient_idea = (len(previous_answers) == 0 and is_idea_sufficiently_detailed(req.idea))
+            if previous_answers:
+                user_content += "\n\nPrevious clarifying answers provided by the user:"
+                for idx, ans in enumerate(previous_answers, 1):
+                    user_content += f"\nQuestion {idx} answer: {ans}"
+                user_content += f"\n\nTotal questions answered so far: {len(previous_answers)} of 3."
 
-        is_blueprint_stage = has_stop_signal or is_max_questions or is_sufficient_idea
+            detected_skill = detect_user_experience_level(req.idea, previous_answers)
 
-        if is_blueprint_stage:
-            user_content += "\n\nGenerate the complete Project Execution Blueprint (schema_version: 2) JSON now."
-            messages = [
-                {"role": "system", "content": V2_BLUEPRINT_SYSTEM_PROMPT},
-                {"role": "user", "content": user_content},
-            ]
-            blueprint_response = generate_roadmap_with_validation(
-                messages,
-                user_skill_level=detected_skill,
-                idea=req.idea,
-                previous_answers=previous_answers,
-            )
-            try:
-                user_id_val = current_user.id if isinstance(current_user, models.User) else getattr(current_user, "id", None)
-                roadmap_record = models.Roadmap(
-                    user_id=user_id_val,
-                    original_idea=req.idea,
-                    data=blueprint_response.get("data", blueprint_response),
-                )
-                db.add(roadmap_record)
-                db.commit()
-                db.refresh(roadmap_record)
-                blueprint_response["id"] = roadmap_record.id
-                blueprint_response["original_idea"] = req.idea
-                if isinstance(blueprint_response.get("data"), dict):
-                    blueprint_response["data"]["id"] = roadmap_record.id
-                    blueprint_response["data"]["original_idea"] = req.idea
-            except Exception as db_err:
-                logger.error(f"Database save error in blueprint stage: {db_err}", exc_info=True)
-                db.rollback()
-            blueprint_response["original_idea"] = req.idea
-            return blueprint_response
-        else:
-            messages = [
-                {"role": "system", "content": ADAPTIVE_CLARIFICATION_SYSTEM_PROMPT},
-                {"role": "user", "content": user_content},
-            ]
-            response = call_groq_llm(messages)
-            if response.get("type") == "roadmap":
-                blueprint_response = normalize_blueprint_v2(
-                    response,
+            # Stop conditions:
+            # Rule C: 0 questions if idea already contains enough information.
+            # Rule F: Maximum 3 questions total.
+            # Rule H: Stop interrogating if user says "I don't know", "you decide", "just generate", etc.
+            has_stop_signal = any(is_stop_interrogation_signal(ans) for ans in previous_answers)
+            is_max_questions = len(previous_answers) >= 3
+            is_sufficient_idea = (len(previous_answers) == 0 and is_idea_sufficiently_detailed(req.idea))
+
+            is_blueprint_stage = has_stop_signal or is_max_questions or is_sufficient_idea
+
+            req_id = getattr(getattr(request, "state", None), "request_id", None)
+
+            if is_blueprint_stage:
+                user_content += "\n\nGenerate the complete Project Execution Blueprint (schema_version: 2) JSON now."
+                messages = [
+                    {"role": "system", "content": V2_BLUEPRINT_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_content},
+                ]
+                blueprint_response = generate_roadmap_with_validation(
+                    messages,
+                    user_skill_level=detected_skill,
                     idea=req.idea,
-                    experience_level=detected_skill,
                     previous_answers=previous_answers,
+                    request_id=req_id,
+                    user_id=user_id_val,
+                )
+                record_ai_usage_event(
+                    db,
+                    user_id=user_id_val,
+                    action="plan",
+                    success=True,
+                    tokens=_last_llm_usage,
                 )
                 try:
-                    user_id_val = current_user.id if isinstance(current_user, models.User) else getattr(current_user, "id", None)
                     roadmap_record = models.Roadmap(
                         user_id=user_id_val,
                         original_idea=req.idea,
@@ -1946,38 +2107,81 @@ def generate_plan(
                         blueprint_response["data"]["id"] = roadmap_record.id
                         blueprint_response["data"]["original_idea"] = req.idea
                 except Exception as db_err:
-                    logger.error(f"Database save error in question stage: {db_err}", exc_info=True)
+                    logger.error(f"Database save error in blueprint stage: {db_err}", exc_info=True)
                     db.rollback()
                 blueprint_response["original_idea"] = req.idea
                 return blueprint_response
             else:
-                # LLM returned type == 'question'
-                q_text = (response.get("text") or "").strip()
-                # Rule G: Never ask technical questions (which db, which framework, etc.)
-                if any(re.search(pat, q_text.lower()) for pat in [
-                    r"\b(which\s*(database|db|framework|library|backend|frontend)\b)",
-                    r"\b(what\s*(database|tech\s*stack|framework)\b)",
-                ]):
-                    logger.info("Intercepted technical question for user. Generating blueprint directly.")
-                    return generate_plan(
-                        request,
-                        IdeaRequest(idea=req.idea, previous_answers=previous_answers + ["you decide"]),
-                        db,
-                        current_user,
+                messages = [
+                    {"role": "system", "content": ADAPTIVE_CLARIFICATION_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_content},
+                ]
+                response = _invoke_llm(
+                    messages,
+                    read_timeout=AI_REQUEST_TIMEOUT,
+                    request_id=req_id,
+                    user_id=user_id_val,
+                    action="plan",
+                )
+                record_ai_usage_event(
+                    db,
+                    user_id=user_id_val,
+                    action="plan",
+                    success=True,
+                    tokens=_last_llm_usage,
+                )
+                if response.get("type") == "roadmap":
+                    blueprint_response = normalize_blueprint_v2(
+                        response,
+                        idea=req.idea,
+                        experience_level=detected_skill,
+                        previous_answers=previous_answers,
                     )
+                    try:
+                        roadmap_record = models.Roadmap(
+                            user_id=user_id_val,
+                            original_idea=req.idea,
+                            data=blueprint_response.get("data", blueprint_response),
+                        )
+                        db.add(roadmap_record)
+                        db.commit()
+                        db.refresh(roadmap_record)
+                        blueprint_response["id"] = roadmap_record.id
+                        blueprint_response["original_idea"] = req.idea
+                        if isinstance(blueprint_response.get("data"), dict):
+                            blueprint_response["data"]["id"] = roadmap_record.id
+                            blueprint_response["data"]["original_idea"] = req.idea
+                    except Exception as db_err:
+                        logger.error(f"Database save error in question stage: {db_err}", exc_info=True)
+                        db.rollback()
+                    blueprint_response["original_idea"] = req.idea
+                    return blueprint_response
+                else:
+                    # LLM returned type == 'question'
+                    q_text = (response.get("text") or "").strip()
+                    # Rule G: Never ask technical questions (which db, which framework, etc.)
+                    if any(re.search(pat, q_text.lower()) for pat in [
+                        r"\b(which\s*(database|db|framework|library|backend|frontend)\b)",
+                        r"\b(what\s*(database|tech\s*stack|framework)\b)",
+                    ]):
+                        logger.info("Intercepted technical question for user. Generating blueprint directly.")
+                        return generate_plan(
+                            request,
+                            IdeaRequest(idea=req.idea, previous_answers=previous_answers + ["you decide"]),
+                            db,
+                            current_user,
+                        )
 
-                return {"type": "question", "text": q_text, "original_idea": req.idea}
-    except HTTPException as he:
-        logger.error(f"HTTP error in /plan endpoint ({he.status_code}): {he.detail}", exc_info=True)
-        return JSONResponse(
-            status_code=he.status_code,
-            content={"error": True, "detail": str(he.detail), "message": "Failed to process project plan. Please try again."}
-        )
-    except Exception as exc:
-        logger.error(f"Unexpected error in /plan endpoint: {exc}", exc_info=True)
-        return JSONResponse(
-            status_code=500,
-            content={"error": True, "message": "Something went wrong. Please try again."}
-        )
+                    return {"type": "question", "text": q_text, "original_idea": req.idea}
+        except HTTPException as he:
+            record_ai_usage_event(db, user_id=user_id_val, action="plan", success=False)
+            raise he
+        except Exception as exc:
+            record_ai_usage_event(db, user_id=user_id_val, action="plan", success=False)
+            logger.error(f"Unexpected error in /plan endpoint: {exc}", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={"error": True, "message": "AI generation is temporarily unavailable. Please try again."}
+            )
 
 

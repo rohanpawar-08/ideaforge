@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { Icon } from '../components/common/Icon'
-import { getAccount, changePassword, exportAccountData, deleteAccount } from '../services/api'
+import { getAccount, changePassword, exportAccountData, deleteAccount, getAIUsage } from '../services/api'
 
 export function AccountPage({
   token,
@@ -9,6 +9,7 @@ export function AccountPage({
   onLogout,
 }) {
   const [account, setAccount] = useState(null)
+  const [aiUsage, setAiUsage] = useState(null)
   const [isLoadingAccount, setIsLoadingAccount] = useState(true)
   const [accountError, setAccountError] = useState(null)
 
@@ -40,9 +41,15 @@ export function AccountPage({
       setIsLoadingAccount(true)
       setAccountError(null)
       try {
-        const data = await getAccount(token, onLogout)
+        const [accData, usageData] = await Promise.all([
+          getAccount(token, onLogout),
+          getAIUsage(token, onLogout).catch(() => null),
+        ])
         if (isMounted) {
-          setAccount(data)
+          setAccount(accData)
+          if (usageData) {
+            setAiUsage(usageData)
+          }
         }
       } catch (err) {
         if (isMounted) {
@@ -237,6 +244,48 @@ export function AccountPage({
                 <Icon name="check" size={12} /> Active
               </span>
             </div>
+          </div>
+        </section>
+
+        {/* Card: AI Usage Today */}
+        <section className="account-card" aria-labelledby="section-ai-usage">
+          <div className="account-card-header">
+            <div className="account-card-icon">
+              <Icon name="sparkles" size={18} />
+            </div>
+            <div>
+              <h3 id="section-ai-usage">AI Usage Today</h3>
+              <p className="account-card-subtitle">Daily request quota (resets daily at 00:00 UTC)</p>
+            </div>
+          </div>
+
+          <div className="account-details-list">
+            <div className="account-detail-row">
+              <span className="account-detail-label">Blueprints</span>
+              <span className="account-detail-value" id="ai-usage-plan">
+                {aiUsage?.usage?.plan ? `${aiUsage.usage.plan.used} / ${aiUsage.usage.plan.limit}` : '—'}
+              </span>
+            </div>
+            <div className="account-detail-row">
+              <span className="account-detail-label">Compare</span>
+              <span className="account-detail-value" id="ai-usage-compare">
+                {aiUsage?.usage?.compare ? `${aiUsage.usage.compare.used} / ${aiUsage.usage.compare.limit}` : '—'}
+              </span>
+            </div>
+            <div className="account-detail-row">
+              <span className="account-detail-label">AI Chat</span>
+              <span className="account-detail-value" id="ai-usage-chat">
+                {aiUsage?.usage?.chat ? `${aiUsage.usage.chat.used} / ${aiUsage.usage.chat.limit}` : '—'}
+              </span>
+            </div>
+            {aiUsage?.usage?.regenerate && (
+              <div className="account-detail-row">
+                <span className="account-detail-label">Regeneration</span>
+                <span className="account-detail-value" id="ai-usage-regenerate">
+                  {`${aiUsage.usage.regenerate.used} / ${aiUsage.usage.regenerate.limit}`}
+                </span>
+              </div>
+            )}
           </div>
         </section>
 

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, JSON, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, JSON, DateTime, ForeignKey, Boolean, Index
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from database import Base
@@ -14,6 +14,7 @@ class User(Base):
 
     roadmaps = relationship("Roadmap", back_populates="user", cascade="all, delete-orphan")
     reset_tokens = relationship("PasswordResetToken", back_populates="user", cascade="all, delete-orphan")
+    ai_usage_events = relationship("AIUsageEvent", back_populates="user", cascade="all, delete-orphan")
 
 
 class Roadmap(Base):
@@ -39,3 +40,25 @@ class PasswordResetToken(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     user = relationship("User", back_populates="reset_tokens")
+
+
+class AIUsageEvent(Base):
+    __tablename__ = "ai_usage_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    action = Column(String, nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    provider = Column(String, nullable=False, default="groq")
+    model = Column(String, nullable=False, default="llama-3.3-70b-versatile")
+    success = Column(Boolean, nullable=False, default=True)
+    prompt_tokens = Column(Integer, nullable=True)
+    completion_tokens = Column(Integer, nullable=True)
+    total_tokens = Column(Integer, nullable=True)
+
+    user = relationship("User", back_populates="ai_usage_events")
+
+    __table_args__ = (
+        Index("ix_ai_usage_events_user_action_created", "user_id", "action", "created_at"),
+    )
+
