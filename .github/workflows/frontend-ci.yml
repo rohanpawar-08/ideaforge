@@ -1,0 +1,50 @@
+name: Frontend CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    name: Frontend Build and Tests
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: "frontend/package-lock.json"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build frontend production bundle
+        run: npm run build
+        env:
+          VITE_API_URL: https://ideaforge-senx.onrender.com
+
+      - name: Run Theme Toggle Test
+        run: node test_theme_toggle.js
+
+      - name: Run Progress Tracking Test
+        run: node test_progress_tracking.js
+
+      - name: Run Docs Export Test
+        run: node test_docs_export.mjs
+
+      - name: Run README Export Test
+        run: node test_readme_export.mjs
+
+      - name: Run Blueprint V2 Exports & Compatibility Test
+        run: node test_v2_exports_and_compatibility.mjs

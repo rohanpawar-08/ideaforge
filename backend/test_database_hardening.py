@@ -17,7 +17,7 @@ from unittest.mock import MagicMock
 from sqlalchemy import inspect as sa_inspect, text
 
 
-VENV_PYTHON = os.path.abspath(
+VENV_PYTHON = sys.executable if sys.executable else os.path.abspath(
     os.path.join(os.path.dirname(__file__), ".venv", "Scripts", "python.exe")
 )
 BACKEND_DIR = os.path.abspath(os.path.dirname(__file__))

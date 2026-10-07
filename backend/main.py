@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import secrets
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -68,6 +69,7 @@ from blueprint_v2 import (
     validate_blueprint_v2_schema,
     normalize_blueprint_v2,
 )
+from services.logging_service import log_http_request, validate_startup_configuration
 
 logging.basicConfig(
     level=logging.INFO,
@@ -82,6 +84,9 @@ if not SECRET_KEY:
     raise RuntimeError("SECRET_KEY environment variable is required.")
 if len(SECRET_KEY) < 32:
     raise RuntimeError("SECRET_KEY must be at least 32 characters long.")
+
+# Validate overall environment configuration
+validate_startup_configuration()
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 24
@@ -217,9 +222,29 @@ async def request_correlation_id_middleware(request: Request, call_next):
         request_id = str(uuid.uuid4())
 
     request.state.request_id = request_id
-    response = await call_next(request)
-    response.headers["X-Request-ID"] = request_id
-    return response
+    start_time = time.time()
+    try:
+        response = await call_next(request)
+        duration_ms = (time.time() - start_time) * 1000.0
+        log_http_request(
+            method=request.method,
+            path=request.url.path,
+            status_code=response.status_code,
+            duration_ms=duration_ms,
+            request_id=request_id,
+        )
+        response.headers["X-Request-ID"] = request_id
+        return response
+    except Exception as exc:
+        duration_ms = (time.time() - start_time) * 1000.0
+        log_http_request(
+            method=request.method,
+            path=request.url.path,
+            status_code=500,
+            duration_ms=duration_ms,
+            request_id=request_id,
+        )
+        raise exc
 
 
 @app.exception_handler(Exception)
@@ -229,10 +254,18 @@ async def global_exception_handler(request: Request, exc: Exception):
         return await http_exception_handler(request, exc)
     if isinstance(exc, RateLimitExceeded):
         return _rate_limit_exceeded_handler(request, exc)
-    logger.error(f"Global unhandled error on {request.url.path}: {exc}", exc_info=True)
+    req_id = getattr(getattr(request, "state", None), "request_id", "unknown")
+    logger.error(
+        f"Global unhandled error on {request.url.path} (rid={req_id}): {exc}",
+        exc_info=True,
+    )
     return JSONResponse(
         status_code=500,
-        content={"error": True, "message": "Something went wrong. Please try again."}
+        content={
+            "error": True,
+            "message": "Something went wrong. Please try again.",
+            "request_id": req_id,
+        },
     )
 
 LLM_API_KEY = os.getenv("LLM_API_KEY")
@@ -712,6 +745,15 @@ def readiness_check(db: Session = Depends(get_db)):
             status_code=503,
             content={"status": "unavailable", "database": "disconnected"},
         )
+
+
+@app.get("/version")
+def get_version():
+    return {
+        "service": "ideaforge-backend",
+        "version": os.getenv("APP_VERSION", "0.1.0"),
+        "environment": os.getenv("APP_ENV", "development"),
+    }
 
 
 @app.post("/auth/signup", response_model=TokenResponse)

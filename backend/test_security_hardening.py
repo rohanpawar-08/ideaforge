@@ -9,7 +9,7 @@ import requests
 
 TEST_PORT = 8991
 BASE_URL = f"http://127.0.0.1:{TEST_PORT}"
-VENV_PYTHON = os.path.abspath("backend/.venv/Scripts/python.exe")
+VENV_PYTHON = sys.executable if sys.executable else os.path.abspath("backend/.venv/Scripts/python.exe")
 
 # -------------------------------------------------------------
 # Embedded Test Server Runner (used when invoked with --server)

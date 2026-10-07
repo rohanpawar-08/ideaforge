@@ -4,11 +4,17 @@
  * error handling, and 401 session expiration handling.
  */
 
-const API_URL =
-  (typeof window !== 'undefined' &&
-  (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
-    ? 'http://localhost:8000'
-    : import.meta.env.VITE_API_URL) || 'http://localhost:8000'
+const DEFAULT_PRODUCTION_API_URL = 'https://ideaforge-senx.onrender.com'
+
+const API_URL = (() => {
+  if (
+    typeof window !== 'undefined' &&
+    (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+  ) {
+    return import.meta.env.VITE_API_URL || 'http://localhost:8000'
+  }
+  return import.meta.env.VITE_API_URL || DEFAULT_PRODUCTION_API_URL
+})()
 
 /**
  * Core authenticated fetch helper
@@ -18,6 +24,38 @@ const API_URL =
  * @param {() => void} [onUnauthorized] - Callback when 401 response is received
  * @returns {Promise<Response>}
  */
+/**
+ * Safely parse API error responses into user-friendly messages.
+ * Includes Reference ID when provided by unexpected 500 errors.
+ *
+ * @param {Response|null} res
+ * @param {object|null} data
+ * @param {string} [defaultMsg]
+ * @returns {string}
+ */
+export function formatApiError(res, data, defaultMsg = 'An unexpected server error occurred.') {
+  if (!res) {
+    return 'Backend service is currently unavailable. Please check your network connection and try again.'
+  }
+  let msg = data?.detail || data?.message
+  if (!msg) {
+    if (res.status === 401) {
+      msg = 'Your session has expired or is unauthorized. Please log in again.'
+    } else if (res.status === 429) {
+      msg = 'Request limit or AI daily quota reached. Please try again later.'
+    } else if (res.status === 502 || res.status === 503 || res.status === 504) {
+      msg = 'AI service is temporarily unavailable. Please try again shortly.'
+    } else {
+      msg = defaultMsg
+    }
+  }
+  // Include reference ID for unexpected server errors (500) if available
+  if (res.status >= 500 && data?.request_id) {
+    msg += ` (Reference ID: ${data.request_id})`
+  }
+  return msg
+}
+
 export async function apiFetch(endpoint, options = {}, token = '', onUnauthorized = null) {
   const url = endpoint.startsWith('http') ? endpoint : `${API_URL}${endpoint}`
   const currentToken = token || (typeof localStorage !== 'undefined' ? localStorage.getItem('ideaforge_token') : '')
@@ -30,10 +68,15 @@ export async function apiFetch(endpoint, options = {}, token = '', onUnauthorize
     headers['Authorization'] = `Bearer ${currentToken}`
   }
 
-  const res = await fetch(url, {
-    ...options,
-    headers,
-  })
+  let res
+  try {
+    res = await fetch(url, {
+      ...options,
+      headers,
+    })
+  } catch {
+    throw new Error('Backend service is currently unavailable. Please check your network connection or try again shortly.')
+  }
 
   if (res.status === 401) {
     if (typeof onUnauthorized === 'function') {
@@ -52,15 +95,20 @@ export async function apiFetch(endpoint, options = {}, token = '', onUnauthorize
  * @returns {Promise<{ access_token: string, token_type?: string }>}
  */
 export async function login(email, password) {
-  const res = await fetch(`${API_URL}/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: email.trim(), password: password.trim() }),
-  })
+  let res
+  try {
+    res = await fetch(`${API_URL}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: email.trim(), password: password.trim() }),
+    })
+  } catch {
+    throw new Error('Backend service is currently unavailable. Please check your network connection.')
+  }
 
   const data = await res.json().catch(() => null)
   if (!res.ok) {
-    throw new Error(data?.detail || `Authentication failed (${res.status})`)
+    throw new Error(formatApiError(res, data, `Authentication failed (${res.status})`))
   }
   if (!data?.access_token) {
     throw new Error('No access token received from server.')
@@ -75,15 +123,20 @@ export async function login(email, password) {
  * @returns {Promise<{ access_token: string, token_type?: string }>}
  */
 export async function signup(email, password) {
-  const res = await fetch(`${API_URL}/auth/signup`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: email.trim(), password: password.trim() }),
-  })
+  let res
+  try {
+    res = await fetch(`${API_URL}/auth/signup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: email.trim(), password: password.trim() }),
+    })
+  } catch {
+    throw new Error('Backend service is currently unavailable. Please check your network connection.')
+  }
 
   const data = await res.json().catch(() => null)
   if (!res.ok) {
-    throw new Error(data?.detail || `Registration failed (${res.status})`)
+    throw new Error(formatApiError(res, data, `Registration failed (${res.status})`))
   }
   if (!data?.access_token) {
     throw new Error('No access token received from server.')
@@ -116,14 +169,15 @@ export async function generatePlan(idea, previousAnswers = [], token = '', onUna
   if (!res.ok) {
     const errData = await res.json().catch(() => null)
     console.error('generatePlan returned error:', res.status, errData)
-    const friendlyMsg =
-      errData?.detail ||
-      errData?.message ||
-      (res.status === 429
+    const friendlyMsg = formatApiError(
+      res,
+      errData,
+      res.status === 429
         ? 'Daily AI blueprint generation limit reached. Please try again tomorrow.'
         : res.status === 502 || res.status === 504
         ? 'AI generation is temporarily unavailable. Please try again.'
-        : 'Something went wrong — please try again.')
+        : 'Something went wrong — please try again.'
+    )
     throw new Error(friendlyMsg)
   }
 
@@ -143,7 +197,8 @@ export async function generatePlan(idea, previousAnswers = [], token = '', onUna
 export async function getRoadmaps(token = '', onUnauthorized = null) {
   const res = await apiFetch('/roadmaps', { method: 'GET' }, token, onUnauthorized)
   if (!res.ok) {
-    throw new Error(`Failed to load history (Status: ${res.status})`)
+    const errData = await res.json().catch(() => null)
+    throw new Error(formatApiError(res, errData, `Failed to load history (Status: ${res.status})`))
   }
   const data = await res.json()
   return Array.isArray(data) ? data : []
@@ -158,7 +213,8 @@ export async function getRoadmaps(token = '', onUnauthorized = null) {
 export async function getRoadmap(id, token = '', onUnauthorized = null) {
   const res = await apiFetch(`/roadmaps/${id}`, { method: 'GET' }, token, onUnauthorized)
   if (!res.ok) {
-    throw new Error(`Failed to fetch roadmap ${id}`)
+    const errData = await res.json().catch(() => null)
+    throw new Error(formatApiError(res, errData, `Failed to fetch roadmap ${id}`))
   }
   return res.json()
 }
@@ -188,14 +244,15 @@ export async function regenerateSection(roadmapId, sectionKey, previousAnswers =
 
   if (!res.ok) {
     const errData = await res.json().catch(() => null)
-    const msg =
-      errData?.detail ||
-      errData?.message ||
-      (res.status === 429
+    const msg = formatApiError(
+      res,
+      errData,
+      res.status === 429
         ? 'Daily AI regeneration limit reached. Please try again tomorrow.'
         : res.status === 502 || res.status === 504
         ? 'AI generation is temporarily unavailable. Please try again.'
-        : `Server error (${res.status})`)
+        : `Server error (${res.status})`
+    )
     throw new Error(msg)
   }
 
@@ -227,14 +284,15 @@ export async function askRoadmap(roadmapId, message, token = '', onUnauthorized 
 
   if (!res.ok) {
     const errData = await res.json().catch(() => null)
-    const msg =
-      errData?.detail ||
-      errData?.message ||
-      (res.status === 429
+    const msg = formatApiError(
+      res,
+      errData,
+      res.status === 429
         ? 'Daily AI chat limit reached. Please try again tomorrow.'
         : res.status === 502 || res.status === 504
         ? 'AI service is temporarily unavailable. Please try again.'
-        : `Server returned ${res.status}`)
+        : `Server returned ${res.status}`
+    )
     throw new Error(msg)
   }
 
@@ -263,7 +321,7 @@ export async function applyRoadmapChange(roadmapId, section, data, token = '', o
 
   if (!res.ok) {
     const errData = await res.json().catch(() => null)
-    throw new Error(errData?.detail || 'Failed to apply change to database')
+    throw new Error(formatApiError(res, errData, 'Failed to apply change to database'))
   }
 
   return res.json()
@@ -294,7 +352,7 @@ export async function compareIdeas(ideas, token = '', onUnauthorized = null) {
 
   if (!res.ok) {
     const errData = await res.json().catch(() => null)
-    throw new Error(errData?.detail || `Server returned status ${res.status}`)
+    throw new Error(formatApiError(res, errData, `Server returned status ${res.status}`))
   }
 
   const data = await res.json()
@@ -323,7 +381,8 @@ export async function generateViva(payload, token = '', onUnauthorized = null) {
   )
 
   if (!res.ok) {
-    throw new Error(`Viva generation failed with status ${res.status}`)
+    const errData = await res.json().catch(() => null)
+    throw new Error(formatApiError(res, errData, `Viva generation failed with status ${res.status}`))
   }
   return res.json()
 }
@@ -334,14 +393,19 @@ export async function generateViva(payload, token = '', onUnauthorized = null) {
  * @returns {Promise<{ message: string }>}
  */
 export async function forgotPassword(email) {
-  const res = await fetch(`${API_URL}/auth/forgot-password`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: (email || '').trim() }),
-  })
+  let res
+  try {
+    res = await fetch(`${API_URL}/auth/forgot-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: (email || '').trim() }),
+    })
+  } catch {
+    throw new Error('Backend service is currently unavailable. Please check your network connection.')
+  }
   const data = await res.json().catch(() => null)
   if (!res.ok) {
-    throw new Error(data?.detail || data?.message || `Request failed (${res.status})`)
+    throw new Error(formatApiError(res, data, `Request failed (${res.status})`))
   }
   return data
 }
@@ -353,14 +417,19 @@ export async function forgotPassword(email) {
  * @returns {Promise<{ message: string }>}
  */
 export async function resetPassword(token, newPassword) {
-  const res = await fetch(`${API_URL}/auth/reset-password`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token: (token || '').trim(), new_password: newPassword }),
-  })
+  let res
+  try {
+    res = await fetch(`${API_URL}/auth/reset-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: (token || '').trim(), new_password: newPassword }),
+    })
+  } catch {
+    throw new Error('Backend service is currently unavailable. Please check your network connection.')
+  }
   const data = await res.json().catch(() => null)
   if (!res.ok) {
-    throw new Error(data?.detail || data?.message || `Reset failed (${res.status})`)
+    throw new Error(formatApiError(res, data, `Reset failed (${res.status})`))
   }
   return data
 }
@@ -389,7 +458,7 @@ export async function changePassword(currentPassword, newPassword, token = '', o
   )
   const data = await res.json().catch(() => null)
   if (!res.ok) {
-    throw new Error(data?.detail || data?.message || `Password change failed (${res.status})`)
+    throw new Error(formatApiError(res, data, `Password change failed (${res.status})`))
   }
   return data
 }
@@ -404,7 +473,7 @@ export async function getAccount(token = '', onUnauthorized = null) {
   const res = await apiFetch('/account', { method: 'GET' }, token, onUnauthorized)
   const data = await res.json().catch(() => null)
   if (!res.ok) {
-    throw new Error(data?.detail || `Failed to fetch account info (${res.status})`)
+    throw new Error(formatApiError(res, data, `Failed to fetch account info (${res.status})`))
   }
   return data
 }
@@ -419,7 +488,7 @@ export async function exportAccountData(token = '', onUnauthorized = null) {
   const res = await apiFetch('/account/export', { method: 'GET' }, token, onUnauthorized)
   const data = await res.json().catch(() => null)
   if (!res.ok) {
-    throw new Error(data?.detail || `Data export failed (${res.status})`)
+    throw new Error(formatApiError(res, data, `Data export failed (${res.status})`))
   }
   return data
 }
@@ -444,7 +513,7 @@ export async function deleteAccount(password, token = '', onUnauthorized = null)
   )
   const data = await res.json().catch(() => null)
   if (!res.ok) {
-    throw new Error(data?.detail || data?.message || `Account deletion failed (${res.status})`)
+    throw new Error(formatApiError(res, data, `Account deletion failed (${res.status})`))
   }
   return data
 }
@@ -459,7 +528,7 @@ export async function getAIUsage(token = '', onUnauthorized = null) {
   const res = await apiFetch('/account/ai-usage', { method: 'GET' }, token, onUnauthorized)
   const data = await res.json().catch(() => null)
   if (!res.ok) {
-    throw new Error(data?.detail || `Failed to fetch AI usage (${res.status})`)
+    throw new Error(formatApiError(res, data, `Failed to fetch AI usage (${res.status})`))
   }
   return data
 }
