@@ -1,0 +1,8 @@
+/**
+ * IdeaForge Component Styles
+ * Import tokens, globals, and core component styles.
+ */
+
+@import './tokens.css';
+@import './globals.css';
+@import '../App.css';
