@@ -230,6 +230,48 @@ export function ComparePage({
                     </span>
                   </div>
 
+                  {(item.complexity || item.learning_difficulty || item.portfolio_value || item.monetization_potential) && (
+                    <div className="comp-dimensions-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: '8px', margin: '10px 0', fontSize: '0.82rem' }}>
+                      {item.complexity && (
+                        <div style={{ background: 'var(--surface-color)', padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
+                          <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Complexity</span>
+                          <strong style={{ color: 'var(--text-primary)', fontSize: '0.8rem' }}>{item.complexity}</strong>
+                        </div>
+                      )}
+                      {item.learning_difficulty && (
+                        <div style={{ background: 'var(--surface-color)', padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
+                          <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Learning Curve</span>
+                          <strong style={{ color: 'var(--text-primary)', fontSize: '0.8rem' }}>{item.learning_difficulty}</strong>
+                        </div>
+                      )}
+                      {item.portfolio_value && (
+                        <div style={{ background: 'var(--surface-color)', padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
+                          <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Portfolio</span>
+                          <strong style={{ color: 'var(--text-primary)', fontSize: '0.8rem' }}>{item.portfolio_value}</strong>
+                        </div>
+                      )}
+                      {item.monetization_potential && (
+                        <div style={{ background: 'var(--surface-color)', padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
+                          <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Monetization</span>
+                          <strong style={{ color: 'var(--text-primary)', fontSize: '0.8rem' }}>{item.monetization_potential}</strong>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {Array.isArray(item.major_risks) && item.major_risks.length > 0 && (
+                    <div className="comp-risks-block" style={{ margin: '8px 0', padding: '8px', borderRadius: '6px', background: 'rgba(239, 68, 68, 0.06)', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
+                      <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-danger, #ef4444)', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <Icon name="warning" size={11} /> Key Risks
+                      </span>
+                      <ul style={{ margin: '4px 0 0 16px', padding: 0, fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                        {item.major_risks.map((risk, rIdx) => (
+                          <li key={rIdx}>{risk}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
                   <div className="comp-factors">
                     <div className="comp-factor-block pros-block">
                       <div className="factor-title">

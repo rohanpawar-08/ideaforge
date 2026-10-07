@@ -7,6 +7,7 @@ import { BeginnerGuideSection, isBeginnerUser } from '../components/roadmap/Begi
 import { DatabaseSchemaSection } from '../components/roadmap/DatabaseSchemaSection'
 import { MilestonesSection } from '../components/roadmap/MilestonesSection'
 import { RoadmapChat } from '../components/chat/RoadmapChat'
+import { BlueprintViewer } from '../components/blueprint/BlueprintViewer'
 import { DocumentActions } from '../components/documents/DocumentActions'
 
 function formatDate(dateString) {
@@ -57,6 +58,8 @@ export function RoadmapPage({
 }) {
   if (!roadmap) return null
 
+  const data = roadmap.data || roadmap
+  const isV2 = data.schema_version === 2 || Boolean(data.project_summary) || Boolean(data.implementation_plan)
   const isBeginner = isBeginnerUser(roadmap, previousAnswers, chatLog)
 
   return (
@@ -126,60 +129,80 @@ export function RoadmapPage({
         </div>
       )}
 
-      {/* Overview with Feasibility, Timeline, Stack & Features */}
-      <RoadmapOverview
-        roadmap={roadmap}
-        originalIdea={originalIdea}
-        headerActions={
-          <DocumentActions
-            onDownloadSrs={onDownloadSrs}
-            onDownloadSynopsis={onDownloadSynopsis}
-            onDownloadViva={onDownloadViva}
-            isGeneratingViva={isGeneratingViva}
-            onDownloadReadme={onDownloadReadme}
-            onDownloadPdf={onDownloadPdf}
-            onPlanAnother={onPlanAnother}
+      {/* V2 Project Execution Blueprint or Legacy V1 Roadmap */}
+      {isV2 ? (
+        <BlueprintViewer
+          blueprint={roadmap}
+          originalIdea={originalIdea}
+          progress={progress}
+          regeneratingSection={regeneratingSection}
+          onRegenerateSection={onRegenerateSection}
+          onDownloadSrs={onDownloadSrs}
+          onDownloadSynopsis={onDownloadSynopsis}
+          onDownloadViva={onDownloadViva}
+          isGeneratingViva={isGeneratingViva}
+          onDownloadReadme={onDownloadReadme}
+          onDownloadPdf={onDownloadPdf}
+          onPlanAnother={onPlanAnother}
+        />
+      ) : (
+        <>
+          {/* Overview with Feasibility, Timeline, Stack & Features */}
+          <RoadmapOverview
+            roadmap={roadmap}
+            originalIdea={originalIdea}
+            headerActions={
+              <DocumentActions
+                onDownloadSrs={onDownloadSrs}
+                onDownloadSynopsis={onDownloadSynopsis}
+                onDownloadViva={onDownloadViva}
+                isGeneratingViva={isGeneratingViva}
+                onDownloadReadme={onDownloadReadme}
+                onDownloadPdf={onDownloadPdf}
+                onPlanAnother={onPlanAnother}
+              />
+            }
+            onRegenerateStack={() => onRegenerateSection('stack')}
+            isRegeneratingStack={Boolean(regeneratingSection.stack)}
           />
-        }
-        onRegenerateStack={() => onRegenerateSection('stack')}
-        isRegeneratingStack={Boolean(regeneratingSection.stack)}
-      />
 
-      {/* Developer Setup Guide */}
-      {roadmap.setup_guide && (
-        <SetupGuideSection
-          setupGuide={roadmap.setup_guide}
-          onRegenerate={() => onRegenerateSection('setup_guide')}
-          isRegenerating={Boolean(regeneratingSection.setup_guide)}
-        />
-      )}
+          {/* Developer Setup Guide */}
+          {roadmap.setup_guide && (
+            <SetupGuideSection
+              setupGuide={roadmap.setup_guide}
+              onRegenerate={() => onRegenerateSection('setup_guide')}
+              isRegenerating={Boolean(regeneratingSection.setup_guide)}
+            />
+          )}
 
-      {/* Beginner's Guide (Only shown if beginner user) */}
-      {isBeginner && (
-        <BeginnerGuideSection
-          roadmap={roadmap}
-          idea={roadmap.original_idea || originalIdea}
-        />
-      )}
+          {/* Beginner's Guide (Only shown if beginner user) */}
+          {isBeginner && (
+            <BeginnerGuideSection
+              roadmap={roadmap}
+              idea={roadmap.original_idea || originalIdea}
+            />
+          )}
 
-      {/* Suggested Database Schema */}
-      {roadmap.suggested_schema && (
-        <DatabaseSchemaSection
-          schema={roadmap.suggested_schema}
-          onRegenerate={() => onRegenerateSection('suggested_schema')}
-          isRegenerating={Boolean(regeneratingSection.suggested_schema)}
-        />
-      )}
+          {/* Suggested Database Schema */}
+          {roadmap.suggested_schema && (
+            <DatabaseSchemaSection
+              schema={roadmap.suggested_schema}
+              onRegenerate={() => onRegenerateSection('suggested_schema')}
+              isRegenerating={Boolean(regeneratingSection.suggested_schema)}
+            />
+          )}
 
-      {/* Milestones Timeline */}
-      {roadmap.milestones && (
-        <MilestonesSection
-          milestones={roadmap.milestones}
-          checkedTasks={progress ? progress.checkedTasks : {}}
-          onToggleTask={progress ? progress.handleToggleTask : () => {}}
-          onRegenerate={() => onRegenerateSection('milestones')}
-          isRegenerating={Boolean(regeneratingSection.milestones)}
-        />
+          {/* Milestones Timeline */}
+          {roadmap.milestones && (
+            <MilestonesSection
+              milestones={roadmap.milestones}
+              checkedTasks={progress ? progress.checkedTasks : {}}
+              onToggleTask={progress ? progress.handleToggleTask : () => {}}
+              onRegenerate={() => onRegenerateSection('milestones')}
+              isRegenerating={Boolean(regeneratingSection.milestones)}
+            />
+          )}
+        </>
       )}
 
       {/* Follow-up Roadmap Chat & Adjustments */}

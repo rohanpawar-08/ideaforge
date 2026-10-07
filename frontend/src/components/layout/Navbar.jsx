@@ -9,6 +9,7 @@ export function Navbar({
   view,
   hasStarted,
   onOpenHistory,
+  onOpenAccount,
   onReset,
   onLogout,
 }) {
@@ -36,7 +37,19 @@ export function Navbar({
 
       <div className="header-actions">
         {token && currentUserEmail && (
-          <span className="user-badge" title={`Signed in as ${currentUserEmail}`}>
+          <span
+            className="user-badge clickable"
+            onClick={onOpenAccount}
+            title={`Signed in as ${currentUserEmail} · Click to manage account`}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                onOpenAccount?.()
+              }
+            }}
+          >
             <Icon name="user" size={12} />
             {currentUserEmail}
           </span>
@@ -61,6 +74,16 @@ export function Navbar({
             >
               <Icon name="book" size={14} />
               History
+            </button>
+            <button
+              type="button"
+              className={`btn-secondary btn-sm ${view === 'account' ? 'active-nav-tab' : ''}`}
+              onClick={onOpenAccount}
+              id="btn-account"
+              title="Account & Security Settings"
+            >
+              <Icon name="user" size={14} />
+              Account
             </button>
             <button
               type="button"

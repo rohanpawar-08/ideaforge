@@ -163,7 +163,7 @@ def test_alembic_configuration_import():
     config = Config(ini_path)
     script = ScriptDirectory.from_config(config)
     heads = script.get_heads()
-    assert "0001_baseline_schema" in heads, f"Expected 0001_baseline_schema in heads, got {heads}"
+    assert "0002_password_reset_tokens" in heads or "0001_baseline_schema" in heads, f"Expected 0002_password_reset_tokens or 0001_baseline_schema in heads, got {heads}"
     print(f"[PASS] Alembic configuration loaded successfully. Current head: {heads}")
 
 

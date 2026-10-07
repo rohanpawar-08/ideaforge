@@ -8,6 +8,7 @@ import { GeneratorPage } from './pages/GeneratorPage'
 import { ComparePage } from './pages/ComparePage'
 import { HistoryPage } from './pages/HistoryPage'
 import { RoadmapPage } from './pages/RoadmapPage'
+import { AccountPage } from './pages/AccountPage'
 import {
   generatePlan,
   getRoadmaps,
@@ -536,6 +537,10 @@ function App() {
     }
   }
 
+  const handleOpenAccount = () => {
+    setView('account')
+  }
+
   const isShowingRoadmap =
     (view === 'generator' && Boolean(roadmap)) || view === 'saved_roadmap'
 
@@ -550,6 +555,7 @@ function App() {
         view,
         hasStarted,
         onOpenHistory: handleOpenHistory,
+        onOpenAccount: handleOpenAccount,
         onReset: handleReset,
         onLogout: handleLogout,
       }}
@@ -566,6 +572,13 @@ function App() {
           authError={authError}
           setAuthError={setAuthError}
           onSubmit={handleAuthSubmit}
+        />
+      ) : view === 'account' ? (
+        <AccountPage
+          token={token}
+          currentUserEmail={currentUserEmail}
+          onBack={handleReset}
+          onLogout={handleLogout}
         />
       ) : view === 'history' ? (
         <HistoryPage

@@ -41,3 +41,24 @@ class VivaRequest(BaseModel):
     roadmap_data: Optional[dict] = None
     roadmap_id: Optional[int] = None
 
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class DeleteAccountRequest(BaseModel):
+    password: str
+
+
+class MessageResponse(BaseModel):
+    message: str

@@ -10,12 +10,324 @@ import { jsPDF } from 'jspdf'
  * @param {string} fallbackIdea - Fallback idea string if not in roadmap object
  * @returns {jsPDF} The generated jsPDF instance
  */
+function renderV2BlueprintPdf(doc, data, ideaText, pageWidth, pageHeight, margin, contentWidth) {
+  let y = margin
+
+  const checkPageBreak = (needed = 24) => {
+    if (y + needed > pageHeight - margin - 24) {
+      doc.addPage()
+      y = margin
+      return true
+    }
+    return false
+  }
+
+  // --- Document Header ---
+  doc.setFillColor(37, 99, 235)
+  doc.rect(margin, y, contentWidth, 4, 'F')
+  y += 20
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(20)
+  doc.setTextColor(15, 23, 42)
+  const title = data.project_summary?.title || 'IdeaForge Project Blueprint'
+  doc.text(title, margin, y)
+  y += 18
+
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(10)
+  doc.setTextColor(100, 116, 139)
+  doc.text('AI Project Architect & Execution Blueprint (v2.0)', margin, y)
+  const dateStr = new Date().toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  })
+  doc.text(`Generated: ${dateStr}`, pageWidth - margin, y, { align: 'right' })
+  y += 14
+
+  doc.setDrawColor(226, 232, 240)
+  doc.line(margin, y, pageWidth - margin, y)
+  y += 20
+
+  // Summary box
+  checkPageBreak(80)
+  const boxTop = y
+  doc.setFillColor(248, 250, 252)
+  doc.setDrawColor(226, 232, 240)
+  doc.roundedRect(margin, boxTop, contentWidth, 56, 4, 4, 'FD')
+
+  const col1 = margin + 14
+  const col2 = margin + 160
+  const col3 = margin + 300
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(8.5)
+  doc.setTextColor(100, 116, 139)
+  doc.text('PROJECT TYPE', col1, boxTop + 18)
+  doc.text('DIFFICULTY', col2, boxTop + 18)
+  doc.text('ESTIMATED TIMELINE', col3, boxTop + 18)
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(10.5)
+  doc.setTextColor(15, 23, 42)
+  doc.text((data.project_summary?.project_type || 'Web Application').toUpperCase(), col1, boxTop + 37)
+  doc.text((data.project_summary?.difficulty || 'Intermediate').toUpperCase(), col2, boxTop + 37)
+  doc.text((data.project_summary?.estimated_duration || '4-6 Weeks').toUpperCase(), col3, boxTop + 37)
+  y = boxTop + 72
+
+  // Problem statement & Description
+  if (data.project_summary?.one_line_description) {
+    checkPageBreak(30)
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(10)
+    doc.setTextColor(37, 99, 235)
+    doc.text('OVERVIEW', margin, y)
+    y += 14
+
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(9.5)
+    doc.setTextColor(15, 23, 42)
+    const splitDesc = doc.splitTextToSize(data.project_summary.one_line_description, contentWidth)
+    doc.text(splitDesc, margin, y)
+    y += splitDesc.length * 13 + 10
+  }
+
+  if (data.project_summary?.problem_statement) {
+    checkPageBreak(30)
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(10)
+    doc.setTextColor(37, 99, 235)
+    doc.text('PROBLEM STATEMENT', margin, y)
+    y += 14
+
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(9.5)
+    doc.setTextColor(15, 23, 42)
+    const splitProb = doc.splitTextToSize(data.project_summary.problem_statement, contentWidth)
+    doc.text(splitProb, margin, y)
+    y += splitProb.length * 13 + 12
+  }
+
+  // Assumptions
+  if (Array.isArray(data.assumptions) && data.assumptions.length > 0) {
+    checkPageBreak(40)
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(10)
+    doc.setTextColor(37, 99, 235)
+    doc.text('ARCHITECTURAL ASSUMPTIONS', margin, y)
+    y += 14
+
+    data.assumptions.forEach((a) => {
+      checkPageBreak(18)
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(9)
+      doc.setTextColor(15, 23, 42)
+      const prefix = `• ${a.assumption}: `
+      doc.text(prefix, margin + 4, y)
+      const pW = doc.getTextWidth(prefix)
+      doc.setFont('helvetica', 'normal')
+      doc.setTextColor(71, 85, 105)
+      const splitReason = doc.splitTextToSize(a.reason || '', contentWidth - pW - 8)
+      doc.text(splitReason, margin + 4 + pW, y)
+      y += splitReason.length * 12 + 4
+    })
+    y += 8
+  }
+
+  // Tech Stack
+  if (Array.isArray(data.recommended_stack) && data.recommended_stack.length > 0) {
+    checkPageBreak(50)
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(10.5)
+    doc.setTextColor(37, 99, 235)
+    doc.text('RECOMMENDED TECHNOLOGY STACK', margin, y)
+    y += 16
+
+    data.recommended_stack.forEach((tech) => {
+      checkPageBreak(22)
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(9.5)
+      doc.setTextColor(15, 23, 42)
+      const name = typeof tech === 'string' ? tech : (tech.technology || '')
+      const purpose = typeof tech === 'string' ? '' : (tech.purpose ? ` (${tech.purpose})` : '')
+      const nameText = `• ${name}${purpose}: `
+      doc.text(nameText, margin + 6, y)
+      const nW = doc.getTextWidth(nameText)
+
+      doc.setFont('helvetica', 'normal')
+      doc.setTextColor(71, 85, 105)
+      const why = typeof tech === 'string' ? '' : (tech.why_recommended || '')
+      const splitWhy = doc.splitTextToSize(why, contentWidth - nW - 10)
+      doc.text(splitWhy, margin + 6 + nW, y)
+      y += splitWhy.length * 12 + 4
+    })
+    y += 8
+  }
+
+  // Database Tables
+  if (data.database?.tables && Array.isArray(data.database.tables) && data.database.tables.length > 0) {
+    checkPageBreak(50)
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(10.5)
+    doc.setTextColor(37, 99, 235)
+    doc.text('DATABASE DESIGN & ENTITY SCHEMA', margin, y)
+    y += 16
+
+    data.database.tables.forEach((table) => {
+      checkPageBreak(34)
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(9.5)
+      doc.setTextColor(15, 23, 42)
+      doc.text(`Table: ${table.name} — ${table.purpose || ''}`, margin + 6, y)
+      y += 14
+
+      if (Array.isArray(table.fields)) {
+        table.fields.forEach((f) => {
+          checkPageBreak(16)
+          doc.setFont('courier', 'bold')
+          doc.setFontSize(8.5)
+          doc.setTextColor(37, 99, 235)
+          const fText = `  • ${f.name} [${f.type}]`
+          doc.text(fText, margin + 8, y)
+          const fW = doc.getTextWidth(fText)
+
+          doc.setFont('helvetica', 'normal')
+          doc.setFontSize(8.5)
+          doc.setTextColor(71, 85, 105)
+          const desc = f.constraints ? ` (${f.constraints}) ${f.description || ''}` : ` - ${f.description || ''}`
+          const splitDesc = doc.splitTextToSize(desc, contentWidth - fW - 12)
+          doc.text(splitDesc, margin + 8 + fW, y)
+          y += splitDesc.length * 11 + 2
+        })
+      }
+      y += 6
+    })
+    y += 6
+  }
+
+  // Implementation Plan
+  if (Array.isArray(data.implementation_plan) && data.implementation_plan.length > 0) {
+    checkPageBreak(60)
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(10.5)
+    doc.setTextColor(37, 99, 235)
+    doc.text('ACTIONABLE IMPLEMENTATION PLAN', margin, y)
+    y += 16
+
+    data.implementation_plan.forEach((phase) => {
+      checkPageBreak(40)
+      doc.setFillColor(241, 245, 249)
+      doc.roundedRect(margin, y, contentWidth, 20, 3, 3, 'F')
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(9.5)
+      doc.setTextColor(37, 99, 235)
+      doc.text(`Phase ${phase.phase || ''}: `, margin + 8, y + 14)
+      const pLabelW = doc.getTextWidth(`Phase ${phase.phase || ''}: `)
+
+      doc.setFont('helvetica', 'bold')
+      doc.setTextColor(15, 23, 42)
+      doc.text(phase.name || phase.goal || '', margin + 8 + pLabelW, y + 14)
+      y += 28
+
+      const tasks = Array.isArray(phase.tasks) ? phase.tasks : []
+      tasks.forEach((t) => {
+        checkPageBreak(30)
+        doc.setFont('helvetica', 'bold')
+        doc.setFontSize(9)
+        doc.setTextColor(15, 23, 42)
+        const tName = typeof t === 'string' ? t : t.task
+        doc.text(`[ ] ${tName}`, margin + 12, y)
+        y += 12
+
+        if (typeof t !== 'string') {
+          if (t.description) {
+            doc.setFont('helvetica', 'normal')
+            doc.setFontSize(8.5)
+            doc.setTextColor(71, 85, 105)
+            const splitDesc = doc.splitTextToSize(t.description, contentWidth - 24)
+            doc.text(splitDesc, margin + 20, y)
+            y += splitDesc.length * 11 + 2
+          }
+          if (t.how_to_test) {
+            checkPageBreak(16)
+            doc.setFont('helvetica', 'italic')
+            doc.setFontSize(8)
+            doc.setTextColor(100, 116, 139)
+            const testText = `Test: ${t.how_to_test}`
+            const splitTest = doc.splitTextToSize(testText, contentWidth - 24)
+            doc.text(splitTest, margin + 20, y)
+            y += splitTest.length * 10 + 3
+          }
+        }
+        y += 4
+      })
+      y += 8
+    })
+  }
+
+  // Testing & Security
+  const hasSec = Array.isArray(data.security_plan) && data.security_plan.length > 0
+  if (hasSec) {
+    checkPageBreak(50)
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(10.5)
+    doc.setTextColor(37, 99, 235)
+    doc.text('SECURITY CONTROLS', margin, y)
+    y += 16
+
+    data.security_plan.forEach((s) => {
+      checkPageBreak(16)
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(8.5)
+      doc.setTextColor(71, 85, 105)
+      const splitS = doc.splitTextToSize(`🛡️ ${s}`, contentWidth - 14)
+      doc.text(splitS, margin + 12, y)
+      y += splitS.length * 11 + 2
+    })
+    y += 6
+  }
+
+  // Running Footer with Page Numbers
+  const totalPages = doc.internal.getNumberOfPages()
+  for (let i = 1; i <= totalPages; i++) {
+    doc.setPage(i)
+    doc.setDrawColor(226, 232, 240)
+    doc.line(margin, pageHeight - 28, pageWidth - margin, pageHeight - 28)
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(8.5)
+    doc.setTextColor(148, 163, 184)
+    doc.text('IdeaForge - AI Project Architect & Execution Blueprint', margin, pageHeight - 16)
+    doc.text(`Page ${i} of ${totalPages}`, pageWidth - margin, pageHeight - 16, { align: 'right' })
+  }
+}
+
+/**
+ * Generates a clean, professionally formatted PDF of a project roadmap.
+ * Includes: Original idea, Feasibility, Estimated weeks, Tech stack,
+ * Setup guide (with getting started command and key tools),
+ * MVP & Stretch features, and week-by-week Milestones with task breakdown.
+ *
+ * @param {Object} roadmap - The roadmap data object
+ * @param {string} fallbackIdea - Fallback idea string if not in roadmap object
+ * @returns {jsPDF} The generated jsPDF instance
+ */
 export function buildRoadmapPdf(roadmap, fallbackIdea = '') {
   const doc = new jsPDF({ unit: 'pt', format: 'a4' })
   const pageWidth = doc.internal.pageSize.getWidth()
   const pageHeight = doc.internal.pageSize.getHeight()
   const margin = 44
   const contentWidth = pageWidth - margin * 2
+
+  const data = roadmap?.data || roadmap
+  const ideaText = roadmap?.original_idea || fallbackIdea || data?.original_idea || 'Project Roadmap'
+
+  // Dispatch V2 blueprints to comprehensive V2 PDF generator
+  if (data?.schema_version === 2 || Boolean(data?.project_summary) || Boolean(data?.implementation_plan)) {
+    renderV2BlueprintPdf(doc, data, ideaText, pageWidth, pageHeight, margin, contentWidth)
+    return doc
+  }
+
   let y = margin
 
   const checkPageBreak = (needed = 24) => {
@@ -55,7 +367,6 @@ export function buildRoadmapPdf(roadmap, fallbackIdea = '') {
   y += 20
 
   // --- 1. Project Idea ---
-  const ideaText = roadmap?.original_idea || fallbackIdea || 'Project Roadmap'
   doc.setFont('helvetica', 'bold')
   doc.setFontSize(10.5)
   doc.setTextColor(37, 99, 235)

@@ -76,8 +76,7 @@ export function GeneratorPage({
               What do you want to build?
             </label>
             <p className="input-hint">
-              Describe your idea in a few sentences. Don&apos;t worry about being perfect—our AI
-              assistant will ask up to 4 quick clarifying questions to scope it.
+              Describe your idea in plain language. IdeaForge will infer architecture and defaults, asking only 0–2 minimal clarifying questions if critical scope is missing.
             </p>
             <textarea
               id="idea-input"
@@ -186,9 +185,9 @@ export function GeneratorPage({
             {isLoading && (
               <div className="message-row message-assistant">
                 <div className="message-avatar">AI</div>
-                {previousAnswers.length >= 3 ||
+                {previousAnswers.length >= 2 ||
                 (messages.length > 0 &&
-                  /just generate|generate it|skip/i.test(
+                  /just generate|generate it|skip|you decide|i don't know|whatever/i.test(
                     messages[messages.length - 1]?.text || ''
                   )) ? (
                   <RoadmapGeneratingCard />
@@ -200,7 +199,7 @@ export function GeneratorPage({
                       aria-hidden="true"
                     ></span>
                     <span className="loading-text">
-                      Analyzing your project idea and formulating questions...
+                      Analyzing project scope and formulating adaptive questions...
                     </span>
                   </div>
                 )}
@@ -230,7 +229,7 @@ export function GeneratorPage({
               type="text"
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
-              placeholder="Type your answer here... (or type 'just generate it')"
+              placeholder="Type your answer here... (or type 'you decide' / 'just generate it')"
               disabled={isLoading}
             />
             <button
@@ -243,10 +242,12 @@ export function GeneratorPage({
           </form>
           <div className="chat-tips">
             <span>
-              Tip: Answer simply, or type <em>&ldquo;just generate it&rdquo;</em> to skip ahead immediately.
+              Tip: Answer simply, or say <em>&ldquo;you decide&rdquo;</em> / <em>&ldquo;just generate it&rdquo;</em> to build immediately.
             </span>
             <span className="progress-badge">
-              Question {previousAnswers.length} of 4 answered
+              {previousAnswers.length > 0
+                ? `Clarification ${previousAnswers.length} of max 3`
+                : 'Adaptive Scoping'}
             </span>
           </div>
         </section>

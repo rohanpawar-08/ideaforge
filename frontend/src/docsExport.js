@@ -69,11 +69,213 @@ export function downloadDocument(markdown, filename = 'document.md') {
  * @param {string} fallbackIdea 
  * @returns {string} Markdown text
  */
+function buildV2SrsDocument(data, fallbackIdea = '') {
+  const summary = data.project_summary || {}
+  const title = summary.title || deriveProjectTitle(fallbackIdea)
+  const slug = toFilenameSlug(title).toUpperCase()
+  const feasibility = capitalize(summary.difficulty || data.feasibility || 'intermediate')
+  const weeks = summary.estimated_duration || `${data.estimated_weeks || 4} Weeks`
+  const currentDate = new Date().toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  })
+  const lines = []
+
+  // Document Title & Academic Header
+  lines.push(`# Software Requirements Specification (SRS)`)
+  lines.push(`## ${title}`)
+  lines.push('')
+  lines.push(`> **Document Reference:** SRS-${slug}-V2.0  `)
+  lines.push(`> **Status:** Final Project Execution Blueprint Draft  `)
+  lines.push(`> **Target Timeline:** ${weeks} | **Project Feasibility:** ${feasibility}  `)
+  lines.push(`> **Date Generated:** ${currentDate}  `)
+  lines.push('')
+  lines.push('---')
+  lines.push('')
+
+  // 1. Introduction & Executive Overview
+  lines.push('## 1. Introduction & Executive Overview')
+  lines.push('')
+  lines.push('### 1.1 Purpose & Scope')
+  lines.push(`The purpose of this Software Requirements Specification (SRS) is to establish a rigorous, formal specification for **${title}**. ${summary.one_line_description || ''}`)
+  lines.push('')
+  lines.push('### 1.2 Problem Statement')
+  lines.push(summary.problem_statement || 'Users require an automated and reliable software system.')
+  lines.push('')
+
+  if (Array.isArray(summary.target_users) && summary.target_users.length > 0) {
+    lines.push('### 1.3 Target Audience & Stakeholders')
+    lines.push(summary.target_users.join(', '))
+    lines.push('')
+  }
+
+  // User Roles
+  if (Array.isArray(data.user_roles) && data.user_roles.length > 0) {
+    lines.push('### 1.4 User Classes & Authorization Roles')
+    lines.push('')
+    lines.push('| User Role | Description | Assigned Permissions |')
+    lines.push('| :--- | :--- | :--- |')
+    data.user_roles.forEach((r) => {
+      const perms = Array.isArray(r.permissions) ? r.permissions.join(', ') : 'standard access'
+      lines.push(`| **${r.role}** | ${r.description} | \`${perms}\` |`)
+    })
+    lines.push('')
+  }
+
+  // 2. Functional Requirements
+  lines.push('## 2. Functional Requirements')
+  lines.push('')
+  const reqs = data.requirements?.functional || []
+  if (Array.isArray(reqs) && reqs.length > 0) {
+    reqs.forEach((r, idx) => {
+      lines.push(`- **FR-${String(idx + 1).padStart(2, '0')}:** ${r}`)
+    })
+    lines.push('')
+  }
+
+  const mvp = data.features?.mvp || []
+  if (Array.isArray(mvp) && mvp.length > 0) {
+    lines.push('### 2.1 Core MVP Capabilities')
+    lines.push('')
+    lines.push('| Capability | Priority | Justification & Requirement Detail |')
+    lines.push('| :--- | :--- | :--- |')
+    mvp.forEach((feat) => {
+      const name = typeof feat === 'string' ? feat : feat.name
+      const priority = typeof feat === 'string' ? 'High' : (feat.priority || 'High')
+      const why = typeof feat === 'string' ? feat : (feat.why_needed || feat.description || '-')
+      lines.push(`| **${name}** | \`${priority}\` | ${why} |`)
+    })
+    lines.push('')
+  }
+
+  if (Array.isArray(data.user_flows) && data.user_flows.length > 0) {
+    lines.push('### 2.2 Primary User Flows')
+    lines.push('')
+    data.user_flows.forEach((flow) => {
+      lines.push(`#### ${flow.name}`)
+      if (Array.isArray(flow.steps)) {
+        flow.steps.forEach((s, i) => lines.push(`${i + 1}. ${s}`))
+      }
+      lines.push('')
+    })
+  }
+
+  if (Array.isArray(data.screens) && data.screens.length > 0) {
+    lines.push('### 2.3 Screen & Interface Plan')
+    lines.push('')
+    lines.push('| Screen Name | Purpose | Visible UI Elements | User Actions |')
+    lines.push('| :--- | :--- | :--- | :--- |')
+    data.screens.forEach((s) => {
+      const elements = Array.isArray(s.elements) ? s.elements.join(', ') : '-'
+      const actions = Array.isArray(s.actions) ? s.actions.join(', ') : '-'
+      lines.push(`| **${s.name}** | ${s.purpose} | ${elements} | ${actions} |`)
+    })
+    lines.push('')
+  }
+
+  // 3. Technical Stack & System Architecture
+  lines.push('## 3. Technical Stack & System Architecture')
+  lines.push('')
+  if (data.architecture?.overview) {
+    lines.push(data.architecture.overview)
+    lines.push('')
+  }
+
+  if (Array.isArray(data.recommended_stack) && data.recommended_stack.length > 0) {
+    lines.push('### 3.1 Recommended Architecture Components')
+    lines.push('')
+    lines.push('| Layer / Component | Technology | Rationale | Alternatives |')
+    lines.push('| :--- | :--- | :--- | :--- |')
+    data.recommended_stack.forEach((tech) => {
+      if (typeof tech === 'string') {
+        lines.push(`| Component | \`${tech}\` | Core library | - |`)
+      } else {
+        const alts = Array.isArray(tech.alternatives) && tech.alternatives.length > 0 ? tech.alternatives.join(', ') : 'None'
+        lines.push(`| ${tech.purpose || 'Component'} | **${tech.technology}** | ${tech.why_recommended} | ${alts} |`)
+      }
+    })
+    lines.push('')
+  }
+
+  // 4. Database Schema & Data Dictionary
+  lines.push('## 4. Database Design & Data Dictionary')
+  lines.push('')
+  const tables = data.database?.tables || []
+  if (Array.isArray(tables) && tables.length > 0) {
+    tables.forEach((table) => {
+      lines.push(`### Entity Table: \`${table.name}\``)
+      lines.push(`*Purpose:* ${table.purpose || 'Stores operational records'}`)
+      lines.push('')
+      lines.push('| Field Name | Type | Key / Constraint | Description |')
+      lines.push('| :--- | :--- | :--- | :--- |')
+      if (Array.isArray(table.fields)) {
+        table.fields.forEach((f) => {
+          lines.push(`| \`${f.name}\` | \`${f.type}\` | ${f.constraints || '-'} | ${f.description || '-'} |`)
+        })
+      }
+      lines.push('')
+    })
+  }
+
+  // 5. API Design Contract
+  if (Array.isArray(data.api_design) && data.api_design.length > 0) {
+    lines.push('## 5. API Design Contract')
+    lines.push('')
+    lines.push('| Method | Endpoint | Auth | Purpose | Request Summary | Response Summary |')
+    lines.push('| :--- | :--- | :--- | :--- | :--- | :--- |')
+    data.api_design.forEach((api) => {
+      lines.push(`| \`${api.method}\` | \`${api.endpoint}\` | ${api.auth_required ? 'Required' : 'Public'} | ${api.purpose} | \`${api.request_summary || 'None'}\` | \`${api.response_summary || 'OK'}\` |`)
+    })
+    lines.push('')
+  }
+
+  // 6. Non-Functional Requirements
+  lines.push('## 6. Non-Functional Requirements')
+  lines.push('')
+  const nonFunc = data.requirements?.non_functional || []
+  if (Array.isArray(nonFunc) && nonFunc.length > 0) {
+    nonFunc.forEach((nf, idx) => {
+      lines.push(`- **NFR-${String(idx + 1).padStart(2, '0')}:** ${nf}`)
+    })
+    lines.push('')
+  }
+
+  // 7. Security & Deployment Plans
+  if (Array.isArray(data.security_plan) && data.security_plan.length > 0) {
+    lines.push('## 7. Security Strategy')
+    lines.push('')
+    data.security_plan.forEach((s) => lines.push(`- 🛡️ ${s}`))
+    lines.push('')
+  }
+
+  if (data.deployment_plan) {
+    lines.push('## 8. Deployment Architecture')
+    lines.push('')
+    lines.push(`- **Frontend:** ${data.deployment_plan.frontend || 'Vercel'}`)
+    lines.push(`- **Backend:** ${data.deployment_plan.backend || 'Render'}`)
+    lines.push(`- **Database:** ${data.deployment_plan.database || 'Neon PostgreSQL'}`)
+    lines.push('')
+  }
+
+  lines.push('---')
+  lines.push('*Generated with [IdeaForge](https://ideaforge-steel-alpha.vercel.app/) — AI Project Architect & Execution Planner.*')
+  lines.push('')
+
+  return lines.join('\n')
+}
+
 export function buildSrsDocument(roadmap, fallbackIdea = '') {
   if (!roadmap) return '# Software Requirements Specification (SRS)\n\nNo roadmap data available.\n'
 
   const data = roadmap.data || roadmap
   const ideaText = (roadmap.original_idea || fallbackIdea || data.original_idea || '').trim()
+
+  // Route V2 blueprints to comprehensive V2 SRS generator
+  if (data.schema_version === 2 || Boolean(data.project_summary) || Boolean(data.implementation_plan)) {
+    return buildV2SrsDocument(data, ideaText)
+  }
+
   const title = deriveProjectTitle(ideaText)
   const slug = toFilenameSlug(title).toUpperCase()
   const feasibility = capitalize(data.feasibility || 'intermediate')
@@ -446,6 +648,109 @@ export function buildSrsDocument(roadmap, fallbackIdea = '') {
   return lines.join('\n')
 }
 
+export function buildV2SynopsisDocument(data, ideaText = '') {
+  const summary = data.project_summary || {}
+  const title = summary.title || deriveProjectTitle(ideaText)
+  const diff = capitalize(summary.difficulty || 'Intermediate')
+  const duration = summary.estimated_duration || '4-6 weeks'
+  const projectType = summary.project_type || 'Full-Stack Web Application'
+  const currentDate = new Date().toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  })
+
+  const lines = []
+  lines.push(`# Project Synopsis: ${title}`)
+  lines.push('')
+  lines.push(`> **AI Project Architect & Execution Blueprint Synopsis**  `)
+  lines.push(`> **Type:** ${projectType} | **Difficulty:** \`${diff}\` | **Timeline:** ${duration}  `)
+  lines.push(`> **Date:** ${currentDate} | **Platform:** IdeaForge  `)
+  lines.push('')
+  lines.push('---')
+  lines.push('')
+
+  lines.push('## 1. Executive Summary')
+  lines.push(summary.one_line_description || `A comprehensive ${projectType} designed to solve real-world operational challenges.`)
+  lines.push('')
+
+  lines.push('## 2. Problem Statement')
+  lines.push(summary.problem_statement || (ideaText ? `"${ideaText}"` : 'Modern operational workflows lack structured automation, real-time coordination, and centralized persistence.'))
+  lines.push('')
+
+  if (Array.isArray(summary.target_users) && summary.target_users.length > 0) {
+    lines.push('### Target Users')
+    summary.target_users.forEach((u) => lines.push(`- 👤 ${u}`))
+    lines.push('')
+  }
+
+  if (Array.isArray(data.assumptions) && data.assumptions.length > 0) {
+    lines.push('## 3. Architecture Assumptions')
+    data.assumptions.forEach((a) => {
+      lines.push(`- **${a.assumption}:** ${a.reason}`)
+    })
+    lines.push('')
+  }
+
+  lines.push('## 4. Proposed Solution & Architecture Overview')
+  if (data.architecture?.overview) {
+    lines.push(data.architecture.overview)
+    lines.push('')
+  }
+
+  if (Array.isArray(data.recommended_stack) && data.recommended_stack.length > 0) {
+    lines.push('## 5. Technology Stack')
+    lines.push('')
+    lines.push('| Layer / Purpose | Technology | Justification |')
+    lines.push('| :--- | :--- | :--- |')
+    data.recommended_stack.forEach((tech) => {
+      if (typeof tech === 'string') {
+        lines.push(`| Core Component | \`${tech}\` | High reliability and developer velocity |`)
+      } else {
+        lines.push(`| ${tech.purpose || 'Component'} | **${tech.technology}** | ${tech.why_recommended} |`)
+      }
+    })
+    lines.push('')
+  }
+
+  const mvp = data.features?.mvp || []
+  if (Array.isArray(mvp) && mvp.length > 0) {
+    lines.push('## 6. Core MVP Modules & Features')
+    lines.push('')
+    mvp.forEach((f) => {
+      const name = typeof f === 'string' ? f : f.name
+      const desc = typeof f === 'string' ? '' : (f.description ? ` — ${f.description}` : '')
+      lines.push(`- **${name}**${desc}`)
+    })
+    lines.push('')
+  }
+
+  const tables = data.database?.tables || []
+  if (Array.isArray(tables) && tables.length > 0) {
+    lines.push('## 7. Database Entities')
+    lines.push('')
+    tables.forEach((t) => {
+      const fields = (t.fields || []).map((f) => `\`${f.name}\``).slice(0, 5).join(', ')
+      lines.push(`- **${t.name}:** ${t.purpose || 'Operational table'}${fields ? ` (Key fields: ${fields})` : ''}`)
+    })
+    lines.push('')
+  }
+
+  if (data.deployment_plan) {
+    lines.push('## 8. Deployment Strategy')
+    lines.push(`- **Frontend:** ${data.deployment_plan.frontend || 'Vercel'}`)
+    lines.push(`- **Backend:** ${data.deployment_plan.backend || 'Render'}`)
+    lines.push(`- **Database:** ${data.deployment_plan.database || 'PostgreSQL'}`)
+    lines.push('')
+  }
+
+  lines.push('---')
+  lines.push('*Generated with [IdeaForge](https://ideaforge-steel-alpha.vercel.app/) — AI Project Architect & Execution Planner.*')
+  lines.push('')
+
+  return lines.join('\n')
+}
+
 /**
  * ============================================================================
  * 2. SYNOPSIS DOCUMENT BUILDER
@@ -461,6 +766,12 @@ export function buildSynopsisDocument(roadmap, fallbackIdea = '') {
 
   const data = roadmap.data || roadmap
   const ideaText = (roadmap.original_idea || fallbackIdea || data.original_idea || '').trim()
+
+  // Route V2 blueprints to comprehensive V2 Synopsis generator
+  if (data.schema_version === 2 || Boolean(data.project_summary) || Boolean(data.implementation_plan)) {
+    return buildV2SynopsisDocument(data, ideaText)
+  }
+
   const title = deriveProjectTitle(ideaText)
   const feasibility = capitalize(data.feasibility || 'intermediate')
   const weeks = data.estimated_weeks || 4
@@ -598,7 +909,12 @@ export function buildVivaQuestionsDocument(roadmap, vivaData, fallbackIdea = '')
   const title = deriveProjectTitle(ideaText)
   const feasibility = capitalize(data.feasibility || 'intermediate')
   const weeks = data.estimated_weeks || 4
-  const stack = Array.isArray(data.recommended_stack) ? data.recommended_stack.join(', ') : 'Modern Full-Stack'
+  const stack = Array.isArray(data.recommended_stack)
+    ? data.recommended_stack
+        .map((s) => (typeof s === 'string' ? s : s.technology || ''))
+        .filter(Boolean)
+        .join(', ')
+    : 'Modern Full-Stack'
 
   // Extract question array
   let questions = []

@@ -4,7 +4,11 @@
  * error handling, and 401 session expiration handling.
  */
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const API_URL =
+  (typeof window !== 'undefined' &&
+  (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+    ? 'http://localhost:8000'
+    : import.meta.env.VITE_API_URL) || 'http://localhost:8000'
 
 /**
  * Core authenticated fetch helper
@@ -300,4 +304,126 @@ export async function generateViva(payload, token = '', onUnauthorized = null) {
   return res.json()
 }
 
+/**
+ * Request password reset instructions
+ * @param {string} email
+ * @returns {Promise<{ message: string }>}
+ */
+export async function forgotPassword(email) {
+  const res = await fetch(`${API_URL}/auth/forgot-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: (email || '').trim() }),
+  })
+  const data = await res.json().catch(() => null)
+  if (!res.ok) {
+    throw new Error(data?.detail || data?.message || `Request failed (${res.status})`)
+  }
+  return data
+}
+
+/**
+ * Reset password using a reset token
+ * @param {string} token
+ * @param {string} newPassword
+ * @returns {Promise<{ message: string }>}
+ */
+export async function resetPassword(token, newPassword) {
+  const res = await fetch(`${API_URL}/auth/reset-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: (token || '').trim(), new_password: newPassword }),
+  })
+  const data = await res.json().catch(() => null)
+  if (!res.ok) {
+    throw new Error(data?.detail || data?.message || `Reset failed (${res.status})`)
+  }
+  return data
+}
+
+/**
+ * Change account password for authenticated user
+ * @param {string} currentPassword
+ * @param {string} newPassword
+ * @param {string} token
+ * @param {() => void} [onUnauthorized]
+ * @returns {Promise<{ message: string }>}
+ */
+export async function changePassword(currentPassword, newPassword, token = '', onUnauthorized = null) {
+  const res = await apiFetch(
+    '/auth/change-password',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        current_password: currentPassword,
+        new_password: newPassword,
+      }),
+    },
+    token,
+    onUnauthorized
+  )
+  const data = await res.json().catch(() => null)
+  if (!res.ok) {
+    throw new Error(data?.detail || data?.message || `Password change failed (${res.status})`)
+  }
+  return data
+}
+
+/**
+ * Fetch authenticated user profile
+ * @param {string} token
+ * @param {() => void} [onUnauthorized]
+ * @returns {Promise<{ id: number, email: string, created_at: string }>}
+ */
+export async function getAccount(token = '', onUnauthorized = null) {
+  const res = await apiFetch('/account', { method: 'GET' }, token, onUnauthorized)
+  const data = await res.json().catch(() => null)
+  if (!res.ok) {
+    throw new Error(data?.detail || `Failed to fetch account info (${res.status})`)
+  }
+  return data
+}
+
+/**
+ * Export authenticated user profile and all saved roadmaps
+ * @param {string} token
+ * @param {() => void} [onUnauthorized]
+ * @returns {Promise<{ account: object, roadmaps: Array }>}
+ */
+export async function exportAccountData(token = '', onUnauthorized = null) {
+  const res = await apiFetch('/account/export', { method: 'GET' }, token, onUnauthorized)
+  const data = await res.json().catch(() => null)
+  if (!res.ok) {
+    throw new Error(data?.detail || `Data export failed (${res.status})`)
+  }
+  return data
+}
+
+/**
+ * Delete account and all associated roadmaps permanently
+ * @param {string} password
+ * @param {string} token
+ * @param {() => void} [onUnauthorized]
+ * @returns {Promise<{ message: string }>}
+ */
+export async function deleteAccount(password, token = '', onUnauthorized = null) {
+  const res = await apiFetch(
+    '/account',
+    {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    },
+    token,
+    onUnauthorized
+  )
+  const data = await res.json().catch(() => null)
+  if (!res.ok) {
+    throw new Error(data?.detail || data?.message || `Account deletion failed (${res.status})`)
+  }
+  return data
+}
+
 export { API_URL }
+

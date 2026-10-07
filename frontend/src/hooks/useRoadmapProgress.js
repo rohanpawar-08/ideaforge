@@ -3,13 +3,22 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 export function useRoadmapProgress(roadmap) {
   const [checkedTasks, setCheckedTasks] = useState({})
 
-  // Compute all tasks from milestones
-  const allMilestones = useMemo(() => roadmap?.milestones || [], [roadmap?.milestones])
+  // Compute all tasks from implementation_plan (V2) or milestones (V1)
   const allTasks = useMemo(() => {
-    return allMilestones.flatMap((m) =>
-      Array.isArray(m.tasks) ? m.tasks : typeof m.tasks === 'string' ? [m.tasks] : []
-    )
-  }, [allMilestones])
+    if (!roadmap) return []
+    if (Array.isArray(roadmap.implementation_plan) && roadmap.implementation_plan.length > 0) {
+      return roadmap.implementation_plan.flatMap((phase) => {
+        if (!Array.isArray(phase.tasks)) return []
+        return phase.tasks.map((t) => (typeof t === 'string' ? t : t?.task || '')).filter(Boolean)
+      })
+    }
+    if (Array.isArray(roadmap.milestones) && roadmap.milestones.length > 0) {
+      return roadmap.milestones.flatMap((m) =>
+        Array.isArray(m.tasks) ? m.tasks : typeof m.tasks === 'string' ? [m.tasks] : []
+      )
+    }
+    return []
+  }, [roadmap?.implementation_plan, roadmap?.milestones])
 
   // Sync checked tasks state from localStorage whenever roadmap changes
   useEffect(() => {

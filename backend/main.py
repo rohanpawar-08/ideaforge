@@ -1,8 +1,10 @@
+import hashlib
 import ipaddress
 import json
 import logging
 import os
 import re
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -31,8 +33,24 @@ from schemas import (
     UserAuthRequest,
     TokenResponse,
     VivaRequest,
+    ForgotPasswordRequest,
+    ResetPasswordRequest,
+    ChangePasswordRequest,
+    DeleteAccountRequest,
+    MessageResponse,
 )
 import models
+from services import email_service
+import blueprint_v2
+from blueprint_v2 import (
+    ADAPTIVE_CLARIFICATION_SYSTEM_PROMPT,
+    V2_BLUEPRINT_SYSTEM_PROMPT,
+    is_stop_interrogation_signal,
+    is_idea_sufficiently_detailed,
+    detect_user_experience_level,
+    validate_blueprint_v2_schema,
+    normalize_blueprint_v2,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -190,126 +208,10 @@ LLM_API_KEY = os.getenv("LLM_API_KEY")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq")
 LLM_MODEL = os.getenv("LLM_MODEL", "openai/gpt-oss-20b")
 
-SYSTEM_PROMPT = (
-    "You are a technical project planning assistant. A user has given you a rough project idea.\n"
-    "Your goal is to gather 4 key pieces of information to build a tailored project roadmap:\n"
-    "1. Target Audience: Who the project is for.\n"
-    "2. Core Feature: The single most important MVP capability or primary functionality.\n"
-    "3. Technical Skill Level: The user's current programming and technical experience.\n"
-    "4. Time Budget: Their rough available timeframe or weekly hours.\n\n"
-    "Adaptive Clarifying Flow Instructions:\n"
-    "- Ask ONE clarifying question at a time. Ask a maximum of 4 questions total.\n"
-    "- Adaptive ordering & wording: Do not follow a rigid script or fixed sequence. Review what the user has already shared in their idea and previous answers. If a piece of information is already provided or implied, acknowledge it and do not ask for it again. Choose whichever missing piece makes the most logical sense to ask next.\n"
-    "- Handling vague answers, 'I don't know', or requests for explanation:\n"
-    "  * If the user's answer is vague, says 'I don't know', or asks for an explanation instead of answering, YOU MUST FIRST briefly explain that concept in plain, simple, jargon-free language (with 1-2 concrete, relatable examples or options tailored to their project idea).\n"
-    "  * DO NOT repeat the exact same question. Instead, naturally continue toward the next piece of missing information or offer options/suggestions they can easily choose from.\n"
-    "- Completion: After 4 questions total, or if the user says 'just generate it', respond with the roadmap JSON instead of another question.\n"
-    "- Skill Level Alignment: Keep the setup_guide consistent with the user's stated skill level from previous answers (e.g. recommend beginner-friendly tools and editors for beginners).\n\n"
-    "Respond ONLY in this JSON format, nothing else:\n"
-    '{"type": "question", "text": "<your plain-language explanation (if needed) and clarifying question>"}\n'
-    "or\n"
-    '{"type": "roadmap", "data": {"feasibility": "beginner|intermediate|advanced", '
-    '"difficulty_breakdown": {"frontend_complexity": "beginner|intermediate|advanced|not_applicable", "backend_complexity": "beginner|intermediate|advanced|not_applicable", "database_complexity": "beginner|intermediate|advanced|not_applicable", "ai_complexity": "beginner|intermediate|advanced|not_applicable", "deployment_complexity": "beginner|intermediate|advanced|not_applicable"}, '
-    '"estimated_weeks": <number>, '
-    '"recommended_stack": ["<tech>"], '
-    '"setup_guide": {"primary_language": "<string>", "editor_recommendation": "<string>", "key_tools": [{"name": "<string>", "purpose": "<string>"}], "getting_started_command": "<string>"}, '
-    '"suggested_schema": [{"table_name": "<string>", "fields": [{"name": "<string>", "type": "<string>", "notes": "<string>"}]}], '
-    '"mvp_features": ["<feature>"], "stretch_features": ["<feature>"], '
-    '"milestones": [{"week": <number>, "goal": "<goal>", "tasks": ["<task>"]}]}}'
-)
-STAGE1_SYSTEM_PROMPT = SYSTEM_PROMPT
+SYSTEM_PROMPT = ADAPTIVE_CLARIFICATION_SYSTEM_PROMPT
+STAGE1_SYSTEM_PROMPT = ADAPTIVE_CLARIFICATION_SYSTEM_PROMPT
+ROADMAP_SYSTEM_PROMPT = V2_BLUEPRINT_SYSTEM_PROMPT
 
-
-ROADMAP_SYSTEM_PROMPT = (
-    "You are a technical project planning assistant. Based on the user's project idea and previous clarifying answers, "
-    "generate a comprehensive and realistic project roadmap.\n\n"
-    "CRITICAL REQUIREMENTS:\n"
-    "1. Skill Level Consistency:\n"
-    "Review the user's stated technical skill level from their previous answers. "
-    "Keep the 'setup_guide' (primary language reason, editor recommendation, key tools, and getting started command) "
-    "strictly consistent with the user's stated skill level — recommend accessible, beginner-friendly tools/editors (like VS Code or beginner-friendly CLIs) "
-    "for beginners, and appropriately advanced tools for more experienced developers.\n\n"
-    "2. Difficulty Breakdown:\n"
-    "In addition to the overall 'feasibility' level (beginner, intermediate, or advanced), provide a granular 'difficulty_breakdown' object "
-    "evaluating: frontend_complexity, backend_complexity, database_complexity, ai_complexity (use 'not_applicable' if the project has no AI component), "
-    "and deployment_complexity. Each must be rated strictly one of: 'beginner', 'intermediate', 'advanced', or 'not_applicable'.\n\n"
-    "3. Suggested Schema:\n"
-    "Provide a 'suggested_schema' list of table objects. Each table object must have:\n"
-    "- 'table_name': string\n"
-    "- 'fields': list of field objects, each with:\n"
-    "  * 'name': string (field or column name)\n"
-    "  * 'type': string (data type, e.g. integer, string, text, boolean, timestamp, json)\n"
-    "  * 'notes': string (plain-text notes flagging things like 'primary key', 'foreign key to X', 'unique', etc. — not a full SQL constraint syntax)\n"
-    "Keep this simple — no ER diagram, just a clear list. Only include tables that are actually relevant to the project idea "
-    "(e.g. do not force a 'users' table if the idea has no user accounts or authentication).\n\n"
-    "4. Stated Skill Level & Beginner's Guide:\n"
-    "Identify the user's stated technical skill level ('beginner', 'intermediate', or 'advanced') from their previous answers and provide 'user_skill_level'.\n"
-    "If the user's stated skill level is 'beginner':\n"
-    "Provide a 'beginner_guide' list containing an entry for each major technology in 'recommended_stack'. Each item must contain:\n"
-    "- 'technology': string (the technology name)\n"
-    "- 'explanation': string (a short plain-language explanation of what it is and why it's used in this project, 2-3 sentences, with ZERO jargon)\n"
-    "- 'learning_resource': object with 'name' (specific, real, well-known free learning resource, e.g. 'Official React Docs', 'freeCodeCamp Node.js Course'), 'url' (general website URL, e.g. 'https://react.dev'), and 'description' (one-line summary).\n\n"
-    "Respond ONLY in this exact JSON schema, with no additional commentary or markdown wrapping:\n"
-    "{\n"
-    '  "type": "roadmap",\n'
-    '  "data": {\n'
-    '    "feasibility": "beginner|intermediate|advanced",\n'
-    '    "user_skill_level": "beginner|intermediate|advanced",\n'
-    '    "difficulty_breakdown": {\n'
-    '      "frontend_complexity": "beginner|intermediate|advanced|not_applicable",\n'
-    '      "backend_complexity": "beginner|intermediate|advanced|not_applicable",\n'
-    '      "database_complexity": "beginner|intermediate|advanced|not_applicable",\n'
-    '      "ai_complexity": "beginner|intermediate|advanced|not_applicable",\n'
-    '      "deployment_complexity": "beginner|intermediate|advanced|not_applicable"\n'
-    '    },\n'
-    '    "estimated_weeks": <number>,\n'
-    '    "recommended_stack": ["<tech1>", "<tech2>"],\n'
-    '    "setup_guide": {\n'
-    '      "primary_language": "<main programming language to use, with a one-line reason>",\n'
-    '      "editor_recommendation": "<code editor/IDE to use and why, e.g. VS Code, Antigravity, PyCharm>",\n'
-    '      "key_tools": [\n'
-    '        {\n'
-    '          "name": "<specific tool, framework, or package name needed beyond the main stack>",\n'
-    '          "purpose": "<specific purpose>"\n'
-    '        }\n'
-    '      ],\n'
-    '      "getting_started_command": "<very first terminal command to run to start the project, e.g. npm create vite@latest>"\n'
-    '    },\n'
-    '    "beginner_guide": [\n'
-    '      {\n'
-    '        "technology": "<technology name>",\n'
-    '        "explanation": "<2-3 sentence plain language explanation without jargon>",\n'
-    '        "learning_resource": {\n'
-    '          "name": "<real well-known free learning resource>",\n'
-    '          "url": "<general resource URL>",\n'
-    '          "description": "<one-line description>"\n'
-    '        }\n'
-    '      }\n'
-    '    ],\n'
-    '    "suggested_schema": [\n'
-    '      {\n'
-    '        "table_name": "<table_name>",\n'
-    '        "fields": [\n'
-    '          {\n'
-    '            "name": "<field_name>",\n'
-    '            "type": "<data_type>",\n'
-    '            "notes": "<plain text note, e.g. primary key, foreign key to X, unique>"\n'
-    '          }\n'
-    '        ]\n'
-    '      }\n'
-    '    ],\n'
-    '    "mvp_features": ["<feature1>", "<feature2>"],\n'
-    '    "stretch_features": ["<feature1>", "<feature2>"],\n'
-    '    "milestones": [\n'
-    '      {\n'
-    '        "week": 1,\n'
-    '        "goal": "<milestone goal>",\n'
-    '        "tasks": ["<task1>", "<task2>"]\n'
-    '      }\n'
-    '    ]\n'
-    '  }\n'
-    "}"
-)
 
 
 def validate_roadmap_schema(obj: dict) -> list[str]:
@@ -465,22 +367,8 @@ def validate_roadmap_schema(obj: dict) -> list[str]:
 
 
 def detect_user_skill_level(answers: list[str], idea: str) -> str:
-    combined_text = " ".join((answers or []) + [idea or ""]).lower()
-    if any(k in combined_text for k in [
-        "beginner", "novice", "starter", "learning to code", "new to programming",
-        "just started", "zero experience", "no coding experience", "first time",
-        "first project", "non-technical", "newbie"
-    ]):
-        return "beginner"
-    if any(k in combined_text for k in [
-        "advanced", "senior", "expert", "experienced engineer", "years of experience"
-    ]):
-        return "advanced"
-    if any(k in combined_text for k in [
-        "intermediate", "some experience", "comfortable with", "familiar with", "mid-level"
-    ]):
-        return "intermediate"
-    return "intermediate"
+    return detect_user_experience_level(idea=idea, answers=answers)
+
 
 
 KNOWN_BEGINNER_RESOURCES = {
@@ -710,96 +598,43 @@ def call_groq_llm(messages: list[dict]) -> dict:
             raise ValueError(f"Malformed JSON returned by model: {err}")
 
 
-def generate_roadmap_with_validation(messages: list[dict], user_skill_level: str = None, idea: str = "") -> dict:
+def generate_roadmap_with_validation(
+    messages: list[dict],
+    user_skill_level: str = None,
+    idea: str = "",
+    previous_answers: list[str] = None
+) -> dict:
     attempt_messages = list(messages)
     max_retries = 1
+    detected_skill = user_skill_level or detect_user_experience_level(idea, previous_answers)
+
+    parsed = None
+    errors = []
 
     for attempt in range(max_retries + 1):
         try:
             parsed = call_groq_llm(attempt_messages)
-            errors = validate_roadmap_schema(parsed)
+            errors = validate_blueprint_v2_schema(parsed)
         except (ValueError, HTTPException) as err:
-            logger.warning(f"Roadmap generation attempt {attempt + 1} encountered error: {err}")
+            logger.warning(f"Blueprint generation attempt {attempt + 1} encountered error: {err}")
             errors = [str(err)]
             parsed = None
 
         if not errors and parsed:
-            inner_data = parsed.get("data") if isinstance(parsed.get("data"), dict) else parsed
-            target_skill = user_skill_level or inner_data.get("user_skill_level")
-            if not target_skill and inner_data.get("feasibility") == "beginner":
-                target_skill = "beginner"
-
-            if target_skill == "beginner":
-                inner_data["user_skill_level"] = "beginner"
-                existing_guide = inner_data.get("beginner_guide")
-                valid_guide = []
-                if isinstance(existing_guide, list):
-                    for item in existing_guide:
-                        if isinstance(item, dict) and item.get("technology"):
-                            valid_guide.append(item)
-                if not valid_guide:
-                    valid_guide = build_beginner_guide_items(
-                        inner_data.get("recommended_stack", []),
-                        idea
-                    )
-                inner_data["beginner_guide"] = valid_guide
-            elif target_skill:
-                inner_data["user_skill_level"] = target_skill
-            return parsed
+            # Fully normalize and enrich to guarantee all V2 schema fields are present
+            return normalize_blueprint_v2(
+                parsed,
+                idea=idea,
+                experience_level=detected_skill,
+                previous_answers=previous_answers
+            )
 
         if attempt < max_retries:
-            logger.info(f"Retrying roadmap generation after schema/validation errors: {errors}")
+            logger.info(f"Retrying blueprint generation after schema/validation errors: {errors}")
             error_details = "\n".join(f"- {err}" for err in errors)
             retry_content = (
-                f"Your previous response had schema/format errors:\n{error_details}\n\n"
-                "Please fix all errors and respond ONLY with valid JSON matching the exact schema:\n"
-                '{\n'
-                '  "type": "roadmap",\n'
-                '  "data": {\n'
-                '    "feasibility": "beginner|intermediate|advanced",\n'
-                '    "difficulty_breakdown": {\n'
-                '      "frontend_complexity": "beginner|intermediate|advanced|not_applicable",\n'
-                '      "backend_complexity": "beginner|intermediate|advanced|not_applicable",\n'
-                '      "database_complexity": "beginner|intermediate|advanced|not_applicable",\n'
-                '      "ai_complexity": "beginner|intermediate|advanced|not_applicable",\n'
-                '      "deployment_complexity": "beginner|intermediate|advanced|not_applicable"\n'
-                '    },\n'
-                '    "estimated_weeks": <number>,\n'
-                '    "recommended_stack": ["<tech1>", "<tech2>"],\n'
-                '    "setup_guide": {\n'
-                '      "primary_language": "<main programming language to use, with a one-line reason>",\n'
-                '      "editor_recommendation": "<code editor/IDE to use and why, e.g. VS Code, Antigravity, PyCharm>",\n'
-                '      "key_tools": [\n'
-                '        {\n'
-                '          "name": "<specific tool, framework, or package name needed beyond the main stack>",\n'
-                '          "purpose": "<specific purpose>"\n'
-                '        }\n'
-                '      ],\n'
-                '      "getting_started_command": "<very first terminal command to run to start the project, e.g. npm create vite@latest>"\n'
-                '    },\n'
-                '    "suggested_schema": [\n'
-                '      {\n'
-                '        "table_name": "<table_name>",\n'
-                '        "fields": [\n'
-                '          {\n'
-                '            "name": "<field_name>",\n'
-                '            "type": "<data_type>",\n'
-                '            "notes": "<plain text note, e.g. primary key, foreign key to X, unique>"\n'
-                '          }\n'
-                '        ]\n'
-                '      }\n'
-                '    ],\n'
-                '    "mvp_features": ["<feature1>", "<feature2>"],\n'
-                '    "stretch_features": ["<feature1>", "<feature2>"],\n'
-                '    "milestones": [\n'
-                '      {\n'
-                '        "week": 1,\n'
-                '        "goal": "<milestone goal>",\n'
-                '        "tasks": ["<task1>", "<task2>"]\n'
-                '      }\n'
-                '    ]\n'
-                '  }\n'
-                '}'
+                f"Your previous response had blueprint schema errors:\n{error_details}\n\n"
+                "Please fix all errors and respond ONLY with valid JSON matching the schema_version: 2 blueprint schema."
             )
             if parsed:
                 attempt_messages.append({
@@ -810,12 +645,25 @@ def generate_roadmap_with_validation(messages: list[dict], user_skill_level: str
                 "role": "user",
                 "content": retry_content
             })
-        else:
-            logger.error(f"Roadmap validation failed after retry: {'; '.join(errors)}")
-            raise HTTPException(
-                status_code=502,
-                detail=f"Roadmap validation failed after retry: {'; '.join(errors)}"
-            )
+
+    # If retries exhausted but we got a parsed dict, defensively normalize it
+    if parsed and isinstance(parsed, dict):
+        logger.warning("Normalizing partially valid LLM response after retries.")
+        return normalize_blueprint_v2(
+            parsed,
+            idea=idea,
+            experience_level=detected_skill,
+            previous_answers=previous_answers
+        )
+
+    # Safe fallback if completely failed
+    logger.error(f"Blueprint generation failed completely: {errors}. Falling back to normalized scaffold.")
+    return normalize_blueprint_v2(
+        {"type": "roadmap", "data": {}},
+        idea=idea,
+        experience_level=detected_skill,
+        previous_answers=previous_answers
+    )
 
 
 @app.get("/")
@@ -880,6 +728,235 @@ def login(request: Request, req: UserAuthRequest, db: Session = Depends(get_db))
     }
 
 
+@app.post("/auth/forgot-password", response_model=MessageResponse)
+@limiter.limit("5/hour")
+def forgot_password(
+    request: Request,
+    req: ForgotPasswordRequest,
+    db: Session = Depends(get_db),
+):
+    email = (req.email or "").strip().lower()
+    generic_message = "If an account exists for that email, reset instructions have been sent."
+
+    if not email or "@" not in email:
+        return {"message": generic_message}
+
+    user = db.query(models.User).filter(models.User.email == email).first()
+    if user:
+        now_utc = datetime.now(timezone.utc)
+        # Invalidate any existing unused reset tokens for this user
+        db.query(models.PasswordResetToken).filter(
+            models.PasswordResetToken.user_id == user.id,
+            models.PasswordResetToken.used_at.is_(None),
+        ).update({"used_at": now_utc})
+
+        raw_token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+        expires_at = now_utc + timedelta(minutes=30)
+
+        reset_rec = models.PasswordResetToken(
+            user_id=user.id,
+            token_hash=token_hash,
+            expires_at=expires_at,
+        )
+        db.add(reset_rec)
+        db.commit()
+
+        try:
+            email_service.send_password_reset_email(user.email, raw_token)
+        except Exception as exc:
+            logger.error(f"Failed to dispatch password reset email: {exc}")
+
+    return {"message": generic_message}
+
+
+@app.post("/auth/reset-password", response_model=MessageResponse)
+@limiter.limit("10/hour")
+def reset_password(
+    request: Request,
+    req: ResetPasswordRequest,
+    db: Session = Depends(get_db),
+):
+    new_password = req.new_password or ""
+    if len(new_password) < 8:
+        raise HTTPException(
+            status_code=400,
+            detail="Password must be at least 8 characters.",
+        )
+
+    raw_token = (req.token or "").strip()
+    if not raw_token:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired reset token.",
+        )
+
+    token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+    reset_rec = (
+        db.query(models.PasswordResetToken)
+        .filter(models.PasswordResetToken.token_hash == token_hash)
+        .first()
+    )
+
+    if not reset_rec or reset_rec.used_at is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired reset token.",
+        )
+
+    now_utc = datetime.now(timezone.utc)
+    expires_at = (
+        reset_rec.expires_at.replace(tzinfo=timezone.utc)
+        if reset_rec.expires_at.tzinfo is None
+        else reset_rec.expires_at
+    )
+    if now_utc > expires_at:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired reset token.",
+        )
+
+    user = db.query(models.User).filter(models.User.id == reset_rec.user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired reset token.",
+        )
+
+    user.hashed_password = hash_password(new_password)
+    reset_rec.used_at = now_utc
+
+    # Invalidate other unused reset tokens for this user
+    db.query(models.PasswordResetToken).filter(
+        models.PasswordResetToken.user_id == user.id,
+        models.PasswordResetToken.used_at.is_(None),
+    ).update({"used_at": now_utc})
+    db.commit()
+
+    return {
+        "message": "Password has been successfully reset. You can now log in with your new password."
+    }
+
+
+@app.post("/auth/change-password", response_model=MessageResponse)
+@limiter.limit("5/hour")
+def change_password(
+    request: Request,
+    req: ChangePasswordRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    current_password = req.current_password or ""
+    new_password = req.new_password or ""
+
+    if not verify_password(current_password, current_user.hashed_password):
+        raise HTTPException(
+            status_code=400,
+            detail="Current password is incorrect.",
+        )
+
+    if len(new_password) < 8:
+        raise HTTPException(
+            status_code=400,
+            detail="Password must be at least 8 characters.",
+        )
+
+    if new_password == current_password:
+        raise HTTPException(
+            status_code=400,
+            detail="New password cannot be the same as the current password.",
+        )
+
+    current_user.hashed_password = hash_password(new_password)
+    db.commit()
+
+    return {"message": "Password changed successfully."}
+
+
+@app.get("/account")
+def get_account(
+    current_user: models.User = Depends(get_current_user),
+):
+    return {
+        "id": current_user.id,
+        "email": current_user.email,
+        "created_at": (
+            current_user.created_at.isoformat()
+            if current_user.created_at
+            else None
+        ),
+    }
+
+
+@app.get("/account/export")
+def export_account_data(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    roadmaps = (
+        db.query(models.Roadmap)
+        .filter(models.Roadmap.user_id == current_user.id)
+        .order_by(models.Roadmap.created_at.desc(), models.Roadmap.id.desc())
+        .all()
+    )
+
+    roadmaps_data = []
+    for r in roadmaps:
+        roadmaps_data.append({
+            "id": r.id,
+            "original_idea": r.original_idea,
+            "data": r.data,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        })
+
+    return {
+        "account": {
+            "id": current_user.id,
+            "email": current_user.email,
+            "created_at": (
+                current_user.created_at.isoformat()
+                if current_user.created_at
+                else None
+            ),
+        },
+        "roadmaps": roadmaps_data,
+    }
+
+
+@app.delete("/account", response_model=MessageResponse)
+@limiter.limit("3/hour")
+def delete_account(
+    request: Request,
+    req: DeleteAccountRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    if not verify_password(req.password or "", current_user.hashed_password):
+        raise HTTPException(
+            status_code=400,
+            detail="Incorrect password. Account deletion aborted.",
+        )
+
+    try:
+        # Explicit transaction-safe deletion of user dependencies
+        db.query(models.Roadmap).filter(models.Roadmap.user_id == current_user.id).delete()
+        db.query(models.PasswordResetToken).filter(
+            models.PasswordResetToken.user_id == current_user.id
+        ).delete()
+        db.delete(current_user)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.error(f"Failed to delete account for user {current_user.id}: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to delete account. Please try again.",
+        )
+
+    return {"message": "Account and all associated data have been permanently deleted."}
+
+
+
 @app.get("/roadmaps")
 def get_roadmaps(
     db: Session = Depends(get_db),
@@ -900,15 +977,20 @@ def get_roadmaps(
                 if isinstance(data_blob.get("data"), dict)
                 else data_blob
             )
-            feasibility = inner_data.get("feasibility", "intermediate")
+            summary_obj = inner_data.get("project_summary") or {}
+            feasibility = summary_obj.get("difficulty") or inner_data.get("feasibility", "intermediate")
             estimated_weeks = inner_data.get("estimated_weeks", 4)
+            schema_version = inner_data.get("schema_version", 1)
 
             results.append({
                 "id": r.id,
                 "original_idea": r.original_idea,
                 "summary": {
+                    "title": summary_obj.get("title") or r.original_idea,
                     "feasibility": feasibility,
                     "estimated_weeks": estimated_weeks,
+                    "schema_version": schema_version,
+                    "project_type": summary_obj.get("project_type", "Full-Stack Web App"),
                     "difficulty_breakdown": inner_data.get("difficulty_breakdown"),
                 },
                 "created_at": r.created_at.isoformat() if r.created_at else None,
@@ -972,21 +1054,6 @@ def regenerate_roadmap_section(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    section_raw = (req.section or "").strip().lower()
-    if section_raw in ["stack", "recommended_stack"]:
-        target_key = "recommended_stack"
-    elif section_raw in ["setup_guide", "setup", "setupguide"]:
-        target_key = "setup_guide"
-    elif section_raw in ["suggested_schema", "schema", "database", "database_schema", "tables"]:
-        target_key = "suggested_schema"
-    elif section_raw in ["milestones", "milestone"]:
-        target_key = "milestones"
-    else:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid section. Must be 'stack', 'setup_guide', 'suggested_schema', or 'milestones'.",
-        )
-
     roadmap = (
         db.query(models.Roadmap)
         .filter(
@@ -1007,6 +1074,30 @@ def regenerate_roadmap_section(
         if isinstance(current_data.get("data"), dict)
         else current_data
     )
+    is_v2 = inner_data.get("schema_version") == 2 or "implementation_plan" in inner_data
+
+    section_raw = (req.section or "").strip().lower()
+    if section_raw in ["stack", "recommended_stack"]:
+        target_key = "recommended_stack"
+    elif section_raw in ["setup_guide", "setup", "setupguide"]:
+        target_key = "setup_guide"
+    elif section_raw in ["suggested_schema", "schema", "database", "database_schema", "tables"]:
+        target_key = "database" if (is_v2 and "database" in inner_data) else "suggested_schema"
+    elif section_raw in ["milestones", "milestone", "implementation_plan", "plan", "build_plan"]:
+        target_key = "implementation_plan" if (is_v2 and "implementation_plan" in inner_data) else "milestones"
+    elif is_v2 and section_raw in ["architecture", "arch"]:
+        target_key = "architecture"
+    elif is_v2 and section_raw in ["features", "feature"]:
+        target_key = "features"
+    elif is_v2 and section_raw in ["testing_plan", "testing"]:
+        target_key = "testing_plan"
+    elif is_v2 and section_raw in ["security_plan", "security"]:
+        target_key = "security_plan"
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid section.",
+        )
 
     original_idea = roadmap.original_idea
     feasibility = inner_data.get("feasibility", "intermediate")
@@ -1308,26 +1399,39 @@ def apply_roadmap_change(
         )
 
     section_raw = (request.section or "").strip().lower()
-    if section_raw in ["stack", "recommended_stack"]:
-        target_key = "recommended_stack"
-    elif section_raw in ["setup_guide", "setup", "setupguide"]:
-        target_key = "setup_guide"
-    elif section_raw in ["suggested_schema", "schema", "database", "database_schema", "tables"]:
-        target_key = "suggested_schema"
-    elif section_raw in ["milestones", "milestone"]:
-        target_key = "milestones"
-    else:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid section. Must be 'stack', 'setup_guide', 'suggested_schema', or 'milestones'.",
-        )
-
     current_data = dict(roadmap.data) if isinstance(roadmap.data, dict) else {}
     inner_data = (
         current_data.get("data")
         if isinstance(current_data.get("data"), dict)
         else current_data
     )
+    is_v2 = inner_data.get("schema_version") == 2 or "implementation_plan" in inner_data
+
+    if section_raw in ["stack", "recommended_stack"]:
+        target_key = "recommended_stack"
+    elif section_raw in ["setup_guide", "setup", "setupguide"]:
+        target_key = "setup_guide"
+    elif section_raw in ["suggested_schema", "schema", "database", "database_schema", "tables"]:
+        target_key = "database" if (is_v2 and "database" in inner_data) else "suggested_schema"
+    elif section_raw in ["milestones", "milestone", "implementation_plan", "plan", "build_plan"]:
+        target_key = "implementation_plan" if (is_v2 and "implementation_plan" in inner_data) else "milestones"
+    elif is_v2 and section_raw in ["architecture", "arch"]:
+        target_key = "architecture"
+    elif is_v2 and section_raw in ["features", "feature"]:
+        target_key = "features"
+    elif is_v2 and section_raw in ["api_design", "api", "apis"]:
+        target_key = "api_design"
+    elif is_v2 and section_raw in ["testing_plan", "testing"]:
+        target_key = "testing_plan"
+    elif is_v2 and section_raw in ["security_plan", "security"]:
+        target_key = "security_plan"
+    elif is_v2 and section_raw in ["screens", "screen"]:
+        target_key = "screens"
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid section.",
+        )
 
     inner_data[target_key] = request.data
     roadmap.data = dict(current_data)
@@ -1369,12 +1473,17 @@ def compare_ideas(
     system_prompt = (
         "You are an expert technical product advisor and software architect.\n"
         "Your task is to evaluate and compare 2 to 3 software project ideas objectively.\n"
-        "Analyze each idea in terms of:\n"
+        "Analyze each idea across the following comprehensive dimensions:\n"
         "- Feasibility level: strictly one of 'beginner', 'intermediate', or 'advanced'\n"
-        "- Estimated timeline: realistic development duration in integer weeks\n"
-        "- Pros: 2 to 4 distinct key advantages, learning benefits, market or technical feasibility points\n"
-        "- Cons: 2 to 4 distinct key challenges, complexity hurdles, third-party dependencies, or pitfalls\n"
-        "Then synthesize a rich, balanced recommendation explaining which idea to pick and why, comparing trade-offs across all of them (e.g., for different developer goals like learning vs shipping fast vs portfolio showcase).\n\n"
+        "- Estimated development effort: realistic duration in integer weeks\n"
+        "- Technical complexity: strictly one of 'Low', 'Moderate', or 'High'\n"
+        "- Learning difficulty: strictly one of 'Low', 'Moderate', or 'Steep'\n"
+        "- Portfolio value: strictly one of 'Moderate', 'High', or 'Very High'\n"
+        "- Monetization potential: strictly one of 'Low', 'Moderate', or 'High'\n"
+        "- Major risks: 2 to 3 specific technical, scope, or operational risks\n"
+        "- Pros: 2 to 4 distinct key advantages and feasibility points\n"
+        "- Cons: 2 to 4 distinct hurdles, bottlenecks, or edge case challenges\n"
+        "Then synthesize a rich, balanced recommendation explaining which idea to pick and why, comparing trade-offs across all of them.\n\n"
         "Respond ONLY with a valid JSON object matching this exact structure:\n"
         "{\n"
         '  "comparisons": [\n'
@@ -1382,6 +1491,11 @@ def compare_ideas(
         '      "idea": "<exact idea text>",\n'
         '      "feasibility": "beginner|intermediate|advanced",\n'
         '      "estimated_weeks": <integer weeks>,\n'
+        '      "complexity": "Low|Moderate|High",\n'
+        '      "learning_difficulty": "Low|Moderate|Steep",\n'
+        '      "portfolio_value": "Moderate|High|Very High",\n'
+        '      "monetization_potential": "Low|Moderate|High",\n'
+        '      "major_risks": ["<risk 1>", "<risk 2>"],\n'
         '      "pros": ["<pro 1>", "<pro 2>"],\n'
         '      "cons": ["<con 1>", "<con 2>"]\n'
         "    }\n"
@@ -1418,6 +1532,11 @@ def compare_ideas(
                 "idea": original_input_text,
                 "feasibility": str(item.get("feasibility", "intermediate")).lower(),
                 "estimated_weeks": int(item.get("estimated_weeks", 4)),
+                "complexity": str(item.get("complexity", "Moderate")),
+                "learning_difficulty": str(item.get("learning_difficulty", "Moderate")),
+                "portfolio_value": str(item.get("portfolio_value", "High")),
+                "monetization_potential": str(item.get("monetization_potential", "Moderate")),
+                "major_risks": [str(r) for r in (item.get("major_risks") or ["Scope creep under tight timelines"])],
                 "pros": [str(p) for p in (item.get("pros") or [])],
                 "cons": [str(c) for c in (item.get("cons") or [])],
             })
@@ -1448,9 +1567,15 @@ def supplement_viva_questions(existing: list[dict], idea: str, data: dict) -> li
     existing_q_texts = {q.get("question", "").lower() for q in results}
     
     stack = data.get("recommended_stack", [])
-    stack_text = ", ".join(str(s) for s in stack) if isinstance(stack, list) else str(stack)
-    schema = data.get("suggested_schema", []) or []
-    table_names = [t.get("table_name") for t in schema if isinstance(t, dict) and t.get("table_name")]
+    if isinstance(stack, list):
+        stack_items = [s.get("technology", str(s)) if isinstance(s, dict) else str(s) for s in stack]
+        stack_text = ", ".join(stack_items)
+    else:
+        stack_text = str(stack)
+
+    v2_tables = data.get("database", {}).get("tables", []) if isinstance(data.get("database"), dict) else []
+    schema = v2_tables or data.get("suggested_schema", []) or []
+    table_names = [t.get("name", t.get("table_name", "record")) for t in schema if isinstance(t, dict)]
     primary_table = table_names[0] if table_names else "primary data records"
 
     fallback_bank = [
@@ -1546,23 +1671,27 @@ def build_viva_questions_with_llm(idea: str, data: dict) -> list[dict]:
     weeks = data.get("estimated_weeks", 4)
     stack_list = data.get("recommended_stack", [])
     if isinstance(stack_list, list):
-        stack_str = ", ".join(str(s) for s in stack_list)
+        stack_items = [s.get("technology", str(s)) if isinstance(s, dict) else str(s) for s in stack_list]
+        stack_str = ", ".join(stack_items)
     else:
         stack_str = str(stack_list)
 
     schema_summary = []
-    suggested_schema = data.get("suggested_schema", []) or []
+    v2_tables = data.get("database", {}).get("tables", []) if isinstance(data.get("database"), dict) else []
+    suggested_schema = v2_tables or data.get("suggested_schema", []) or []
     if isinstance(suggested_schema, list):
         for table in suggested_schema:
             if isinstance(table, dict):
-                t_name = table.get("table_name", "unnamed_table")
+                t_name = table.get("name") or table.get("table_name", "unnamed_table")
                 fields = table.get("fields", [])
                 field_names = [f.get("name") for f in fields if isinstance(f, dict) and f.get("name")]
                 schema_summary.append(f"{t_name} ({', '.join(field_names)})")
     schema_str = "; ".join(schema_summary) or "Standard relational tables"
 
-    mvp_features = data.get("mvp_features", []) or []
-    mvp_str = "\n- ".join(str(f) for f in mvp_features) if isinstance(mvp_features, list) else str(mvp_features)
+    v2_mvp = data.get("features", {}).get("mvp", []) if isinstance(data.get("features"), dict) else []
+    mvp_features = v2_mvp or data.get("mvp_features", []) or []
+    mvp_items = [f.get("name", str(f)) if isinstance(f, dict) else str(f) for f in mvp_features]
+    mvp_str = "\n- ".join(mvp_items) if mvp_items else "Core application features"
 
     stretch_features = data.get("stretch_features", []) or []
     stretch_str = "\n- ".join(str(f) for f in stretch_features) if isinstance(stretch_features, list) else str(stretch_features)
@@ -1742,92 +1871,102 @@ def generate_plan(
             user_content += "\n\nPrevious clarifying answers provided by the user:"
             for idx, ans in enumerate(previous_answers, 1):
                 user_content += f"\nQuestion {idx} answer: {ans}"
-            user_content += f"\n\nTotal questions answered so far: {len(previous_answers)} of 4."
+            user_content += f"\n\nTotal questions answered so far: {len(previous_answers)} of 3."
 
-        is_roadmap_stage = len(previous_answers) >= 4 or any(
-            "just generate" in ans.lower() for ans in previous_answers
-        )
+        detected_skill = detect_user_experience_level(req.idea, previous_answers)
 
-        detected_skill = detect_user_skill_level(previous_answers, req.idea)
+        # Stop conditions:
+        # Rule C: 0 questions if idea already contains enough information.
+        # Rule F: Maximum 3 questions total.
+        # Rule H: Stop interrogating if user says "I don't know", "you decide", "just generate", etc.
+        has_stop_signal = any(is_stop_interrogation_signal(ans) for ans in previous_answers)
+        is_max_questions = len(previous_answers) >= 3
+        is_sufficient_idea = (len(previous_answers) == 0 and is_idea_sufficiently_detailed(req.idea))
 
-        if is_roadmap_stage:
-            user_content += "\nYou have reached the required questions or user requested generation. Generate the final project roadmap JSON now."
+        is_blueprint_stage = has_stop_signal or is_max_questions or is_sufficient_idea
+
+        if is_blueprint_stage:
+            user_content += "\n\nGenerate the complete Project Execution Blueprint (schema_version: 2) JSON now."
             messages = [
-                {"role": "system", "content": ROADMAP_SYSTEM_PROMPT},
+                {"role": "system", "content": V2_BLUEPRINT_SYSTEM_PROMPT},
                 {"role": "user", "content": user_content},
             ]
-            roadmap_response = generate_roadmap_with_validation(messages, user_skill_level=detected_skill, idea=req.idea)
+            blueprint_response = generate_roadmap_with_validation(
+                messages,
+                user_skill_level=detected_skill,
+                idea=req.idea,
+                previous_answers=previous_answers,
+            )
             try:
                 user_id_val = current_user.id if isinstance(current_user, models.User) else getattr(current_user, "id", None)
                 roadmap_record = models.Roadmap(
                     user_id=user_id_val,
                     original_idea=req.idea,
-                    data=roadmap_response.get("data", roadmap_response),
+                    data=blueprint_response.get("data", blueprint_response),
                 )
                 db.add(roadmap_record)
                 db.commit()
                 db.refresh(roadmap_record)
-                roadmap_response["id"] = roadmap_record.id
-                roadmap_response["original_idea"] = req.idea
-                if isinstance(roadmap_response.get("data"), dict):
-                    roadmap_response["data"]["id"] = roadmap_record.id
-                    roadmap_response["data"]["original_idea"] = req.idea
+                blueprint_response["id"] = roadmap_record.id
+                blueprint_response["original_idea"] = req.idea
+                if isinstance(blueprint_response.get("data"), dict):
+                    blueprint_response["data"]["id"] = roadmap_record.id
+                    blueprint_response["data"]["original_idea"] = req.idea
             except Exception as db_err:
-                logger.error(f"Database save error in roadmap stage: {db_err}", exc_info=True)
+                logger.error(f"Database save error in blueprint stage: {db_err}", exc_info=True)
                 db.rollback()
-            roadmap_response["original_idea"] = req.idea
-            return roadmap_response
+            blueprint_response["original_idea"] = req.idea
+            return blueprint_response
         else:
             messages = [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": ADAPTIVE_CLARIFICATION_SYSTEM_PROMPT},
                 {"role": "user", "content": user_content},
             ]
             response = call_groq_llm(messages)
             if response.get("type") == "roadmap":
-                errors = validate_roadmap_schema(response)
-                if errors:
-                    response = generate_roadmap_with_validation(messages, user_skill_level=detected_skill, idea=req.idea)
-                else:
-                    inner_data = response.get("data") if isinstance(response.get("data"), dict) else response
-                    target_skill = detected_skill or inner_data.get("user_skill_level")
-                    if not target_skill and inner_data.get("feasibility") == "beginner":
-                        target_skill = "beginner"
-                    if target_skill == "beginner":
-                        inner_data["user_skill_level"] = "beginner"
-                        existing_guide = inner_data.get("beginner_guide")
-                        valid_guide = []
-                        if isinstance(existing_guide, list):
-                            for item in existing_guide:
-                                if isinstance(item, dict) and item.get("technology"):
-                                    valid_guide.append(item)
-                        if not valid_guide:
-                            valid_guide = build_beginner_guide_items(
-                                inner_data.get("recommended_stack", []),
-                                req.idea
-                            )
-                        inner_data["beginner_guide"] = valid_guide
-                    elif target_skill:
-                        inner_data["user_skill_level"] = target_skill
+                blueprint_response = normalize_blueprint_v2(
+                    response,
+                    idea=req.idea,
+                    experience_level=detected_skill,
+                    previous_answers=previous_answers,
+                )
                 try:
                     user_id_val = current_user.id if isinstance(current_user, models.User) else getattr(current_user, "id", None)
                     roadmap_record = models.Roadmap(
                         user_id=user_id_val,
                         original_idea=req.idea,
-                        data=response.get("data", response),
+                        data=blueprint_response.get("data", blueprint_response),
                     )
                     db.add(roadmap_record)
                     db.commit()
                     db.refresh(roadmap_record)
-                    response["id"] = roadmap_record.id
-                    response["original_idea"] = req.idea
-                    if isinstance(response.get("data"), dict):
-                        response["data"]["id"] = roadmap_record.id
-                        response["data"]["original_idea"] = req.idea
+                    blueprint_response["id"] = roadmap_record.id
+                    blueprint_response["original_idea"] = req.idea
+                    if isinstance(blueprint_response.get("data"), dict):
+                        blueprint_response["data"]["id"] = roadmap_record.id
+                        blueprint_response["data"]["original_idea"] = req.idea
                 except Exception as db_err:
                     logger.error(f"Database save error in question stage: {db_err}", exc_info=True)
                     db.rollback()
-                response["original_idea"] = req.idea
-            return response
+                blueprint_response["original_idea"] = req.idea
+                return blueprint_response
+            else:
+                # LLM returned type == 'question'
+                q_text = (response.get("text") or "").strip()
+                # Rule G: Never ask technical questions (which db, which framework, etc.)
+                if any(re.search(pat, q_text.lower()) for pat in [
+                    r"\b(which\s*(database|db|framework|library|backend|frontend)\b)",
+                    r"\b(what\s*(database|tech\s*stack|framework)\b)",
+                ]):
+                    logger.info("Intercepted technical question for user. Generating blueprint directly.")
+                    return generate_plan(
+                        request,
+                        IdeaRequest(idea=req.idea, previous_answers=previous_answers + ["you decide"]),
+                        db,
+                        current_user,
+                    )
+
+                return {"type": "question", "text": q_text, "original_idea": req.idea}
     except HTTPException as he:
         logger.error(f"HTTP error in /plan endpoint ({he.status_code}): {he.detail}", exc_info=True)
         return JSONResponse(
