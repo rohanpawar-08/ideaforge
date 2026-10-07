@@ -149,18 +149,6 @@ def get_optional_current_user(
 
 
 
-Base.metadata.create_all(bind=engine)
-try:
-    with engine.connect() as conn:
-        conn.execute(
-            text(
-                "ALTER TABLE roadmaps ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id)"
-            )
-        )
-        conn.commit()
-except Exception as migration_err:
-    logger.info(f"Database migration notice: {migration_err}")
-
 DEFAULT_CORS_ORIGINS = [
     "https://ideaforge-steel-alpha.vercel.app",
     "http://localhost:5173",
@@ -831,8 +819,22 @@ def generate_roadmap_with_validation(messages: list[dict], user_skill_level: str
 
 
 @app.get("/")
-def health_check():
+def root_status():
     return {"status": "IdeaForge backend is running"}
+
+
+@app.get("/health")
+@app.get("/ready")
+def readiness_check(db: Session = Depends(get_db)):
+    try:
+        db.execute(text("SELECT 1"))
+        return {"status": "ready", "database": "connected"}
+    except Exception as exc:
+        logger.error(f"Database readiness check failed: {exc}", exc_info=True)
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unavailable", "database": "disconnected"},
+        )
 
 
 @app.post("/auth/signup", response_model=TokenResponse)
