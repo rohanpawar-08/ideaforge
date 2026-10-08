@@ -33,6 +33,8 @@ def check_python_compilation():
         "services/ai_service.py",
         "services/email_service.py",
         "services/logging_service.py",
+        "services/task_identity.py",
+        "services/workspace_service.py",
         "inspect_production_schema.py",
     ]
     for rel_path in files_to_compile:
@@ -74,7 +76,7 @@ def check_alembic_heads_and_drift():
     if len(heads) != 1:
         raise AssertionError(f"Expected exactly 1 Alembic head, found {len(heads)}: {heads}")
 
-    expected_head = "0003_ai_usage_tracking"
+    expected_head = "0004_project_task_states"
     if heads[0] != expected_head:
         raise AssertionError(f"Expected Alembic head '{expected_head}', got '{heads[0]}'")
 

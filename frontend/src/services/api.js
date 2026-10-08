@@ -533,5 +533,91 @@ export async function getAIUsage(token = '', onUnauthorized = null) {
   return data
 }
 
+/**
+ * Fetch project workspace for a roadmap
+ * @param {number|string} roadmapId
+ * @param {string} token
+ * @param {() => void} [onUnauthorized]
+ * @returns {Promise<object>}
+ */
+export async function getWorkspace(roadmapId, token = '', onUnauthorized = null) {
+  const res = await apiFetch(`/roadmaps/${roadmapId}/workspace`, { method: 'GET' }, token, onUnauthorized)
+  const data = await res.json().catch(() => null)
+  if (!res.ok) {
+    throw new Error(formatApiError(res, data, `Failed to load project workspace (${res.status})`))
+  }
+  return data
+}
+
+/**
+ * Update task status or note in a project workspace
+ * @param {number|string} roadmapId
+ * @param {string} taskId
+ * @param {{ status?: string, note?: string }} payload
+ * @param {string} token
+ * @param {() => void} [onUnauthorized]
+ * @returns {Promise<object>}
+ */
+export async function patchTask(roadmapId, taskId, payload, token = '', onUnauthorized = null) {
+  const res = await apiFetch(
+    `/roadmaps/${roadmapId}/tasks/${encodeURIComponent(taskId)}`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+    token,
+    onUnauthorized
+  )
+  const data = await res.json().catch(() => null)
+  if (!res.ok) {
+    throw new Error(formatApiError(res, data, `Failed to update task (${res.status})`))
+  }
+  return data
+}
+
+/**
+ * Import legacy localStorage progress to server workspace
+ * @param {number|string} roadmapId
+ * @param {Array<{ legacy_task_key: string, completed: boolean }>} items
+ * @param {string} token
+ * @param {() => void} [onUnauthorized]
+ * @returns {Promise<{ imported: number, skipped: number }>}
+ */
+export async function importProgress(roadmapId, items, token = '', onUnauthorized = null) {
+  const res = await apiFetch(
+    `/roadmaps/${roadmapId}/tasks/import-progress`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items }),
+    },
+    token,
+    onUnauthorized
+  )
+  const data = await res.json().catch(() => null)
+  if (!res.ok) {
+    throw new Error(formatApiError(res, data, `Failed to import task progress (${res.status})`))
+  }
+  return data
+}
+
+/**
+ * Delete a roadmap and associated task states
+ * @param {number|string} roadmapId
+ * @param {string} token
+ * @param {() => void} [onUnauthorized]
+ * @returns {Promise<{ message: string }>}
+ */
+export async function deleteRoadmap(roadmapId, token = '', onUnauthorized = null) {
+  const res = await apiFetch(`/roadmaps/${roadmapId}`, { method: 'DELETE' }, token, onUnauthorized)
+  const data = await res.json().catch(() => null)
+  if (!res.ok) {
+    throw new Error(formatApiError(res, data, `Failed to delete roadmap (${res.status})`))
+  }
+  return data
+}
+
 export { API_URL }
+
 

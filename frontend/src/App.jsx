@@ -86,8 +86,8 @@ function App() {
   // Document action loading
   const [isGeneratingViva, setIsGeneratingViva] = useState(false)
 
-  // Task Progress hook
-  const progress = useRoadmapProgress(roadmap)
+  // Task Progress hook (server-authoritative with automatic legacy migration)
+  const progress = useRoadmapProgress(roadmap, token, rawLogout)
   const lastRequestRef = useRef({ ideaText: '', answers: [] })
 
   // Logout callback

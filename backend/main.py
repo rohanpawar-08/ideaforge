@@ -39,11 +39,15 @@ from schemas import (
     ChangePasswordRequest,
     DeleteAccountRequest,
     MessageResponse,
+    TaskPatchRequest,
+    ImportProgressRequest,
+    ImportProgressResponse,
 )
 import uuid
 import models
 from services import email_service
 from services import ai_service as ai_service_module
+from services.workspace_service import WorkspaceService
 from services.ai_service import (
     ai_service,
     validate_idea_length,
@@ -980,6 +984,23 @@ def export_account_data(
             "created_at": r.created_at.isoformat() if r.created_at else None,
         })
 
+    task_states = (
+        db.query(models.ProjectTaskState)
+        .filter(models.ProjectTaskState.user_id == current_user.id)
+        .order_by(models.ProjectTaskState.roadmap_id.asc(), models.ProjectTaskState.task_order.asc())
+        .all()
+    )
+    task_states_data = [
+        {
+            "roadmap_id": s.roadmap_id,
+            "task_id": s.task_id,
+            "status": s.status,
+            "note": s.note,
+            "updated_at": s.updated_at.isoformat() if s.updated_at else None,
+        }
+        for s in task_states
+    ]
+
     return {
         "account": {
             "id": current_user.id,
@@ -991,6 +1012,7 @@ def export_account_data(
             ),
         },
         "roadmaps": roadmaps_data,
+        "project_task_states": task_states_data,
     }
 
 
@@ -1018,13 +1040,16 @@ def delete_account(
 
     try:
         # Explicit transaction-safe deletion of user dependencies
-        db.query(models.Roadmap).filter(models.Roadmap.user_id == current_user.id).delete()
+        db.query(models.ProjectTaskState).filter(
+            models.ProjectTaskState.user_id == current_user.id
+        ).delete(synchronize_session=False)
+        db.query(models.Roadmap).filter(models.Roadmap.user_id == current_user.id).delete(synchronize_session=False)
         db.query(models.PasswordResetToken).filter(
             models.PasswordResetToken.user_id == current_user.id
-        ).delete()
+        ).delete(synchronize_session=False)
         db.query(models.AIUsageEvent).filter(
             models.AIUsageEvent.user_id == current_user.id
-        ).delete()
+        ).delete(synchronize_session=False)
         db.delete(current_user)
         db.commit()
     except Exception as exc:
@@ -1124,6 +1149,147 @@ def get_roadmap(
         return JSONResponse(
             status_code=500,
             content={"error": True, "message": "Failed to fetch roadmap."}
+        )
+
+
+@app.delete("/roadmaps/{roadmap_id}", response_model=MessageResponse)
+def delete_roadmap(
+    roadmap_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    roadmap = (
+        db.query(models.Roadmap)
+        .filter(
+            models.Roadmap.id == roadmap_id,
+            models.Roadmap.user_id == current_user.id,
+        )
+        .first()
+    )
+    if not roadmap:
+        raise HTTPException(status_code=404, detail=f"Roadmap with id {roadmap_id} not found")
+
+    try:
+        db.query(models.ProjectTaskState).filter(
+            models.ProjectTaskState.roadmap_id == roadmap_id
+        ).delete(synchronize_session=False)
+        db.delete(roadmap)
+        db.commit()
+        return {"message": "Roadmap and associated task states deleted successfully."}
+    except Exception as exc:
+        db.rollback()
+        logger.error(f"Failed to delete roadmap {roadmap_id}: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to delete roadmap. Please try again.")
+
+
+@app.get("/roadmaps/{roadmap_id}/workspace")
+def get_roadmap_workspace(
+    roadmap_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    roadmap = (
+        db.query(models.Roadmap)
+        .filter(
+            models.Roadmap.id == roadmap_id,
+            models.Roadmap.user_id == current_user.id,
+        )
+        .first()
+    )
+    if not roadmap:
+        raise HTTPException(status_code=404, detail=f"Roadmap with id {roadmap_id} not found")
+
+    try:
+        return WorkspaceService.get_workspace(db, roadmap, current_user.id)
+    except Exception as exc:
+        logger.error(f"Error fetching workspace for roadmap {roadmap_id}: {exc}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"error": True, "message": "Failed to fetch project workspace."}
+        )
+
+
+@app.patch("/roadmaps/{roadmap_id}/tasks/{task_id}")
+def patch_roadmap_task(
+    roadmap_id: int,
+    task_id: str,
+    req: TaskPatchRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    roadmap = (
+        db.query(models.Roadmap)
+        .filter(
+            models.Roadmap.id == roadmap_id,
+            models.Roadmap.user_id == current_user.id,
+        )
+        .first()
+    )
+    if not roadmap:
+        raise HTTPException(status_code=404, detail=f"Roadmap with id {roadmap_id} not found")
+
+    try:
+        updated_state = WorkspaceService.patch_task(
+            db=db,
+            roadmap=roadmap,
+            user_id=current_user.id,
+            task_id=task_id,
+            status=req.status,
+            note=req.note,
+        )
+        return {
+            "task_id": updated_state.task_id,
+            "status": updated_state.status,
+            "note": updated_state.note,
+            "updated_at": updated_state.updated_at.isoformat() if updated_state.updated_at else None,
+        }
+    except KeyError:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Task '{task_id}' not found in canonical roadmap tasks.",
+        )
+    except Exception as exc:
+        logger.error(f"Error updating task {task_id} in roadmap {roadmap_id}: {exc}", exc_info=True)
+        db.rollback()
+        return JSONResponse(
+            status_code=500,
+            content={"error": True, "message": "Failed to update task."}
+        )
+
+
+@app.post("/roadmaps/{roadmap_id}/tasks/import-progress", response_model=ImportProgressResponse)
+def import_roadmap_progress(
+    roadmap_id: int,
+    req: ImportProgressRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    roadmap = (
+        db.query(models.Roadmap)
+        .filter(
+            models.Roadmap.id == roadmap_id,
+            models.Roadmap.user_id == current_user.id,
+        )
+        .first()
+    )
+    if not roadmap:
+        raise HTTPException(status_code=404, detail=f"Roadmap with id {roadmap_id} not found")
+
+    try:
+        raw_items = [item.model_dump() for item in req.items]
+        res = WorkspaceService.import_legacy_progress(
+            db=db,
+            roadmap=roadmap,
+            user_id=current_user.id,
+            items=raw_items,
+        )
+        return res
+    except Exception as exc:
+        logger.error(f"Error importing progress for roadmap {roadmap_id}: {exc}", exc_info=True)
+        db.rollback()
+        return JSONResponse(
+            status_code=500,
+            content={"error": True, "message": "Failed to import task progress."}
         )
 
 
@@ -1326,6 +1492,14 @@ def regenerate_roadmap_section(
                 )
                 if not isinstance(updated_section_data, list):
                     raise ValueError("suggested_schema must be a list of table objects")
+            elif target_key == "implementation_plan":
+                raw_plan = (
+                    llm_response.get("implementation_plan")
+                    or (llm_response if isinstance(llm_response, list) else [])
+                )
+                if not isinstance(raw_plan, list):
+                    raise ValueError("implementation_plan must be a list of phase objects")
+                updated_section_data = WorkspaceService.reconcile_and_embed_v2_plan(current_data, raw_plan)
             else:  # milestones
                 updated_section_data = (
                     llm_response.get("milestones")
@@ -1564,7 +1738,10 @@ def apply_roadmap_change(
             detail="Invalid section.",
         )
 
-    inner_data[target_key] = request.data
+    if target_key == "implementation_plan" and isinstance(request.data, list):
+        inner_data[target_key] = WorkspaceService.reconcile_and_embed_v2_plan(current_data, request.data)
+    else:
+        inner_data[target_key] = request.data
     roadmap.data = dict(current_data)
     flag_modified(roadmap, "data")
     db.commit()

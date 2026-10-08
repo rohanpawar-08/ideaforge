@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useState } from 'react'
 import { Icon } from '../components/common/Icon'
 import { ProgressTracker } from '../components/roadmap/ProgressTracker'
 import { RoadmapOverview } from '../components/roadmap/RoadmapOverview'
@@ -9,6 +9,7 @@ import { MilestonesSection } from '../components/roadmap/MilestonesSection'
 import { RoadmapChat } from '../components/chat/RoadmapChat'
 import { BlueprintViewer } from '../components/blueprint/BlueprintViewer'
 import { DocumentActions } from '../components/documents/DocumentActions'
+import { BuildView } from '../components/workspace/BuildView'
 
 function formatDate(dateString) {
   if (!dateString) return ''
@@ -56,6 +57,8 @@ export function RoadmapPage({
   previousAnswers = [],
   chatLog = [],
 }) {
+  const [activeProjectTab, setActiveProjectTab] = useState('build') // 'build' | 'blueprint' | 'assistant' | 'documents'
+
   if (!roadmap) return null
 
   const data = roadmap.data || roadmap
@@ -105,14 +108,55 @@ export function RoadmapPage({
         </div>
       )}
 
-      {/* Progress Card at Top of Roadmap View */}
-      {progress && (
-        <ProgressTracker
-          completedCount={progress.completedTasksCount}
-          totalCount={progress.totalTasksCount}
-          percentage={progress.progressPercentage}
-        />
-      )}
+      {/* Project Navigation Bar: Build | Blueprint | AI Assistant | Documents */}
+      <nav className="project-view-navigation-bar" aria-label="Project Navigation">
+        <div className="project-tabs-group">
+          <button
+            type="button"
+            className={`project-tab-btn ${activeProjectTab === 'build' ? 'active' : ''}`}
+            onClick={() => setActiveProjectTab('build')}
+            id="tab-project-build"
+          >
+            <Icon name="rocket" size={14} />
+            <span>Build</span>
+            {progress?.workspace && (
+              <span className="tab-badge">
+                {progress.workspace.done_tasks}/{progress.workspace.total_tasks}
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
+            className={`project-tab-btn ${activeProjectTab === 'blueprint' ? 'active' : ''}`}
+            onClick={() => setActiveProjectTab('blueprint')}
+            id="tab-project-blueprint"
+          >
+            <Icon name="file" size={14} />
+            <span>Blueprint</span>
+          </button>
+          <button
+            type="button"
+            className={`project-tab-btn ${activeProjectTab === 'assistant' ? 'active' : ''}`}
+            onClick={() => setActiveProjectTab('assistant')}
+            id="tab-project-assistant"
+          >
+            <Icon name="message" size={14} />
+            <span>AI Assistant</span>
+            {chatMessages.length > 0 && (
+              <span className="tab-badge">{chatMessages.length}</span>
+            )}
+          </button>
+          <button
+            type="button"
+            className={`project-tab-btn ${activeProjectTab === 'documents' ? 'active' : ''}`}
+            onClick={() => setActiveProjectTab('documents')}
+            id="tab-project-documents"
+          >
+            <Icon name="download" size={14} />
+            <span>Documents</span>
+          </button>
+        </div>
+      </nav>
 
       {regenerateError && (
         <div className="error-banner" role="alert">
@@ -129,94 +173,137 @@ export function RoadmapPage({
         </div>
       )}
 
-      {/* V2 Project Execution Blueprint or Legacy V1 Roadmap */}
-      {isV2 ? (
-        <BlueprintViewer
-          blueprint={roadmap}
-          originalIdea={originalIdea}
+      {/* TAB 1: BUILD VIEW (Primary Persistent Execution Workspace) */}
+      {activeProjectTab === 'build' && (
+        <BuildView
+          roadmap={roadmap}
           progress={progress}
-          regeneratingSection={regeneratingSection}
-          onRegenerateSection={onRegenerateSection}
-          onDownloadSrs={onDownloadSrs}
-          onDownloadSynopsis={onDownloadSynopsis}
-          onDownloadViva={onDownloadViva}
-          isGeneratingViva={isGeneratingViva}
-          onDownloadReadme={onDownloadReadme}
-          onDownloadPdf={onDownloadPdf}
-          onPlanAnother={onPlanAnother}
+          onSwitchToBlueprint={() => setActiveProjectTab('blueprint')}
         />
-      ) : (
+      )}
+
+      {/* TAB 2: BLUEPRINT (Architectural Specification & Reference) */}
+      {activeProjectTab === 'blueprint' && (
         <>
-          {/* Overview with Feasibility, Timeline, Stack & Features */}
-          <RoadmapOverview
-            roadmap={roadmap}
-            originalIdea={originalIdea}
-            headerActions={
-              <DocumentActions
-                onDownloadSrs={onDownloadSrs}
-                onDownloadSynopsis={onDownloadSynopsis}
-                onDownloadViva={onDownloadViva}
-                isGeneratingViva={isGeneratingViva}
-                onDownloadReadme={onDownloadReadme}
-                onDownloadPdf={onDownloadPdf}
-                onPlanAnother={onPlanAnother}
+          {/* Progress Tracker bar in Blueprint reference view */}
+          {progress && (
+            <ProgressTracker
+              completedCount={progress.completedTasksCount}
+              totalCount={progress.totalTasksCount}
+              percentage={progress.progressPercentage}
+            />
+          )}
+
+          {isV2 ? (
+            <BlueprintViewer
+              blueprint={roadmap}
+              originalIdea={originalIdea}
+              progress={progress}
+              regeneratingSection={regeneratingSection}
+              onRegenerateSection={onRegenerateSection}
+              onDownloadSrs={onDownloadSrs}
+              onDownloadSynopsis={onDownloadSynopsis}
+              onDownloadViva={onDownloadViva}
+              isGeneratingViva={isGeneratingViva}
+              onDownloadReadme={onDownloadReadme}
+              onDownloadPdf={onDownloadPdf}
+              onPlanAnother={onPlanAnother}
+            />
+          ) : (
+            <>
+              <RoadmapOverview
+                roadmap={roadmap}
+                originalIdea={originalIdea}
+                headerActions={
+                  <DocumentActions
+                    onDownloadSrs={onDownloadSrs}
+                    onDownloadSynopsis={onDownloadSynopsis}
+                    onDownloadViva={onDownloadViva}
+                    isGeneratingViva={isGeneratingViva}
+                    onDownloadReadme={onDownloadReadme}
+                    onDownloadPdf={onDownloadPdf}
+                    onPlanAnother={onPlanAnother}
+                  />
+                }
+                onRegenerateStack={() => onRegenerateSection('stack')}
+                isRegeneratingStack={Boolean(regeneratingSection.stack)}
               />
-            }
-            onRegenerateStack={() => onRegenerateSection('stack')}
-            isRegeneratingStack={Boolean(regeneratingSection.stack)}
-          />
 
-          {/* Developer Setup Guide */}
-          {roadmap.setup_guide && (
-            <SetupGuideSection
-              setupGuide={roadmap.setup_guide}
-              onRegenerate={() => onRegenerateSection('setup_guide')}
-              isRegenerating={Boolean(regeneratingSection.setup_guide)}
-            />
-          )}
+              {roadmap.setup_guide && (
+                <SetupGuideSection
+                  setupGuide={roadmap.setup_guide}
+                  onRegenerate={() => onRegenerateSection('setup_guide')}
+                  isRegenerating={Boolean(regeneratingSection.setup_guide)}
+                />
+              )}
 
-          {/* Beginner's Guide (Only shown if beginner user) */}
-          {isBeginner && (
-            <BeginnerGuideSection
-              roadmap={roadmap}
-              idea={roadmap.original_idea || originalIdea}
-            />
-          )}
+              {isBeginner && (
+                <BeginnerGuideSection
+                  roadmap={roadmap}
+                  idea={roadmap.original_idea || originalIdea}
+                />
+              )}
 
-          {/* Suggested Database Schema */}
-          {roadmap.suggested_schema && (
-            <DatabaseSchemaSection
-              schema={roadmap.suggested_schema}
-              onRegenerate={() => onRegenerateSection('suggested_schema')}
-              isRegenerating={Boolean(regeneratingSection.suggested_schema)}
-            />
-          )}
+              {roadmap.suggested_schema && (
+                <DatabaseSchemaSection
+                  schema={roadmap.suggested_schema}
+                  onRegenerate={() => onRegenerateSection('suggested_schema')}
+                  isRegenerating={Boolean(regeneratingSection.suggested_schema)}
+                />
+              )}
 
-          {/* Milestones Timeline */}
-          {roadmap.milestones && (
-            <MilestonesSection
-              milestones={roadmap.milestones}
-              checkedTasks={progress ? progress.checkedTasks : {}}
-              onToggleTask={progress ? progress.handleToggleTask : () => {}}
-              onRegenerate={() => onRegenerateSection('milestones')}
-              isRegenerating={Boolean(regeneratingSection.milestones)}
-            />
+              {roadmap.milestones && (
+                <MilestonesSection
+                  milestones={roadmap.milestones}
+                  checkedTasks={progress ? progress.checkedTasks : {}}
+                  onToggleTask={progress ? progress.handleToggleTask : () => {}}
+                  onRegenerate={() => onRegenerateSection('milestones')}
+                  isRegenerating={Boolean(regeneratingSection.milestones)}
+                />
+              )}
+            </>
           )}
         </>
       )}
 
-      {/* Follow-up Roadmap Chat & Adjustments */}
-      <RoadmapChat
-        messages={chatMessages}
-        chatInput={chatInput}
-        setChatInput={setChatInput}
-        onSendMessage={onSendChatMessage}
-        isLoading={isAskingRoadmap}
-        error={roadmapChatError}
-        onClearError={onClearChatError}
-        onApplyChange={onApplyRoadmapChange}
-        applyingChangeId={applyingChangeId}
-      />
+      {/* TAB 3: AI ASSISTANT (Chat & Adjustments) */}
+      {activeProjectTab === 'assistant' && (
+        <RoadmapChat
+          messages={chatMessages}
+          chatInput={chatInput}
+          setChatInput={setChatInput}
+          onSendMessage={onSendChatMessage}
+          isLoading={isAskingRoadmap}
+          error={roadmapChatError}
+          onClearError={onClearChatError}
+          onApplyChange={onApplyRoadmapChange}
+          applyingChangeId={applyingChangeId}
+        />
+      )}
+
+      {/* TAB 4: DOCUMENTS (SRS, Synopsis, Viva, Readme, PDF Exports) */}
+      {activeProjectTab === 'documents' && (
+        <div className="card documents-page-card" id="project-documents-panel">
+          <div className="card-header">
+            <div>
+              <span className="card-label">PROJECT DOCUMENTATION & EXPORTS</span>
+              <h2 className="card-title">Academic & Developer Deliverables</h2>
+            </div>
+          </div>
+          <p className="card-description" style={{ marginBottom: 'var(--space-5)', color: 'var(--color-text-muted)' }}>
+            Export comprehensive SRS specifications, project synopsis reports, exam viva guides, developer READMEs, and printable PDF roadmaps.
+          </p>
+          <DocumentActions
+            onDownloadSrs={onDownloadSrs}
+            onDownloadSynopsis={onDownloadSynopsis}
+            onDownloadViva={onDownloadViva}
+            isGeneratingViva={isGeneratingViva}
+            onDownloadReadme={onDownloadReadme}
+            onDownloadPdf={onDownloadPdf}
+            onPlanAnother={onPlanAnother}
+          />
+        </div>
+      )}
     </section>
   )
 }

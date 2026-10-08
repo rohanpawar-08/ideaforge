@@ -10,6 +10,17 @@ import json
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
+try:
+    from services.task_identity import derive_phase_key, generate_v2_task_id, compute_task_fingerprint, assign_v2_plan_identities
+except ImportError:
+    try:
+        from backend.services.task_identity import derive_phase_key, generate_v2_task_id, compute_task_fingerprint, assign_v2_plan_identities
+    except ImportError:
+        derive_phase_key = None
+        generate_v2_task_id = None
+        compute_task_fingerprint = None
+        assign_v2_plan_identities = None
+
 logger = logging.getLogger("ideaforge.blueprint_v2")
 
 STOP_INTERROGATION_PATTERNS = [
@@ -1109,6 +1120,51 @@ def normalize_blueprint_v2(
                     ]
                 }
             ]
+    if assign_v2_plan_identities and isinstance(plan, list):
+        plan = assign_v2_plan_identities(plan)
+    elif derive_phase_key and generate_v2_task_id and compute_task_fingerprint and isinstance(plan, list):
+        used_ids = set()
+        cleaned_plan = []
+        for phase_idx, phase in enumerate(plan):
+            if not isinstance(phase, dict):
+                continue
+            phase_copy = dict(phase)
+            p_name = phase_copy.get("name") or phase_copy.get("phase") or f"Phase {phase_idx + 1}"
+            p_num = phase_copy.get("phase", phase_idx + 1)
+            p_key = derive_phase_key(str(p_name), p_num)
+            updated_tasks = []
+            for t in (phase_copy.get("tasks") or []):
+                if isinstance(t, str):
+                    t_dict = {
+                        "task": t,
+                        "description": "",
+                        "files_or_modules": [],
+                        "how_to_test": "",
+                        "definition_of_done": "",
+                    }
+                elif isinstance(t, dict):
+                    t_dict = dict(t)
+                else:
+                    continue
+
+                task_title = t_dict.get("task") or t_dict.get("title") or "task"
+                existing_id = t_dict.get("task_id")
+                if existing_id and str(existing_id).strip():
+                    task_id = str(existing_id).strip()
+                else:
+                    task_id = generate_v2_task_id(p_key, task_title, used_ids)
+                used_ids.add(task_id)
+
+                fp = t_dict.get("task_fingerprint") or compute_task_fingerprint(
+                    p_key, task_title, t_dict.get("files_or_modules"), t_dict.get("definition_of_done")
+                )
+                t_dict["task_id"] = task_id
+                t_dict["task_fingerprint"] = fp
+                updated_tasks.append(t_dict)
+            phase_copy["tasks"] = updated_tasks
+            cleaned_plan.append(phase_copy)
+        plan = cleaned_plan
+
     inner["implementation_plan"] = plan
 
     # 15. Testing Plan

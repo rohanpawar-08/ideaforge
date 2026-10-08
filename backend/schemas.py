@@ -1,5 +1,5 @@
 from typing import Optional, List
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator, ConfigDict
 
 
 class IdeaRequest(BaseModel):
@@ -118,3 +118,68 @@ class DeleteAccountRequest(BaseModel):
 
 class MessageResponse(BaseModel):
     message: str
+
+
+class TaskPatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Optional[str] = None
+    note: Optional[str] = None
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            v_norm = v.strip().lower()
+            if v_norm not in ("todo", "in_progress", "done"):
+                raise ValueError("Status must be one of: 'todo', 'in_progress', 'done'.")
+            return v_norm
+        return v
+
+    @field_validator("note")
+    @classmethod
+    def validate_note(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and len(v) > 2000:
+            raise ValueError("Task note exceeds maximum allowed length of 2000 characters.")
+        return v
+
+    @model_validator(mode="after")
+    def validate_at_least_one(self):
+        if self.status is None and self.note is None:
+            raise ValueError("At least one of 'status' or 'note' must be provided.")
+        return self
+
+
+class ImportProgressItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    legacy_task_key: str
+    completed: bool = True
+
+    @field_validator("legacy_task_key")
+    @classmethod
+    def validate_legacy_task_key(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("legacy_task_key cannot be empty.")
+        if len(v) > 500:
+            raise ValueError("legacy_task_key exceeds maximum length of 500 characters.")
+        return v.strip()
+
+
+class ImportProgressRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: List[ImportProgressItem]
+
+    @field_validator("items")
+    @classmethod
+    def validate_items(cls, v: List[ImportProgressItem]) -> List[ImportProgressItem]:
+        if len(v) > 500:
+            raise ValueError("Exceeded maximum batch size of 500 import items.")
+        return v
+
+
+class ImportProgressResponse(BaseModel):
+    imported: int
+    skipped: int
+
