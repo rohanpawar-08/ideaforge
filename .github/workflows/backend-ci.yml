@@ -46,6 +46,12 @@ jobs:
         run: |
           python backend/release_check.py
 
+      - name: Prepare CI test database
+        run: |
+          rm -f ci_test.db
+          python -m alembic -c backend/alembic.ini upgrade head
+          python -m alembic -c backend/alembic.ini current
+
       - name: Run Security Hardening Tests
         run: |
           python backend/test_security_hardening.py
@@ -65,3 +71,7 @@ jobs:
       - name: Run AI Reliability & Usage Quota Tests
         run: |
           python backend/test_ai_reliability.py
+
+      - name: Run Project Workspace Tests
+        run: |
+          python backend/test_project_workspace.py

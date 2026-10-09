@@ -3,6 +3,7 @@ import sys
 import time
 import subprocess
 import json
+import tempfile
 import py_compile
 from datetime import datetime, timezone
 import requests
@@ -188,13 +189,55 @@ def check_4b_client_ip_resolution():
 
 
 def run_live_server_checks():
+    repo_root = (
+        os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        if os.path.basename(os.path.abspath(os.curdir)) == "backend" or not os.path.exists("backend/alembic.ini")
+        else os.path.abspath(os.curdir)
+    )
+    alembic_ini_path = os.path.join(repo_root, "backend", "alembic.ini")
+
+    # If a valid test DATABASE_URL is set in environment (e.g., CI runner with sqlite:///./ci_test.db),
+    # use it and ensure it is migrated to head.
+    # Otherwise, create an isolated temporary SQLite database so local tests never touch
+    # or depend on pre-existing development databases.
+    env_db_url = os.environ.get("DATABASE_URL", "").strip()
+    is_temp_db = False
+    temp_db_path = None
+
+    if env_db_url.startswith("sqlite://") and "ideaforge.db" not in env_db_url:
+        test_db_url = env_db_url
+    elif env_db_url.startswith("postgresql://"):
+        test_db_url = env_db_url
+    else:
+        temp_db_file = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        temp_db_path = temp_db_file.name.replace("\\", "/")
+        temp_db_file.close()
+        test_db_url = f"sqlite:///{temp_db_path}"
+        is_temp_db = True
+
+    # Ensure target test database is migrated to head using Alembic
+    mig_env = os.environ.copy()
+    mig_env["DATABASE_URL"] = test_db_url
+    mig_env["APP_ENV"] = "testing"
+    mig_res = subprocess.run(
+        [VENV_PYTHON, "-m", "alembic", "-c", alembic_ini_path, "upgrade", "head"],
+        capture_output=True,
+        text=True,
+        cwd=repo_root,
+        env=mig_env,
+    )
+    assert mig_res.returncode == 0, f"Alembic migration failed for test database:\n{mig_res.stderr}\n{mig_res.stdout}"
+
     print("\nStarting live test server on port", TEST_PORT, "...")
     server_env = os.environ.copy()
+    server_env["DATABASE_URL"] = test_db_url
+    server_env["APP_ENV"] = "testing"
     server_env["SECRET_KEY"] = "super_secure_jwt_test_secret_key_2026_ideaforge_at_least_32_chars"
     server_env["CORS_ORIGINS"] = "https://ideaforge-steel-alpha.vercel.app,http://localhost:5173,http://127.0.0.1:5173"
 
     proc = subprocess.Popen(
         [VENV_PYTHON, "backend/test_security_hardening.py", "--server", str(TEST_PORT)],
+        cwd=repo_root,
         env=server_env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -444,6 +487,11 @@ def run_live_server_checks():
             proc.wait(timeout=3)
         except Exception:
             proc.kill()
+        if is_temp_db and temp_db_path and os.path.exists(temp_db_path):
+            try:
+                os.remove(temp_db_path)
+            except OSError:
+                pass
 
 
 if __name__ == "__main__":
